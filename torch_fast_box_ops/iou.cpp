@@ -1,6 +1,5 @@
 #include <torch/extension.h>
 
-TORCH_LIBRARY(box_ops, m) { m.def("iou(Tensor boxes1, Tensor boxes2) -> Tensor"); }
 
 auto iou_cpu(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> at::Tensor
 {
