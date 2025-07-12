@@ -56,7 +56,13 @@ template<> struct box_tag_map<CXCYWH>
     using type = cxcywh_tag;
 };
 
-template<typename T> CXCYWH<T> convert_box(const XYXY<T> box, xyxy_tag, cxcywh_tag)
+#ifdef __CUDACC__
+#define FN_QUAL __host__ __device__
+#else
+#define FN_QUAL
+#endif
+
+template<typename T> FN_QUAL CXCYWH<T> convert_box(const XYXY<T> box, xyxy_tag, cxcywh_tag)
 {
     CXCYWH<T> result;
     result.cx = (box.x1 + box.x2) * 0.5f;
@@ -66,7 +72,7 @@ template<typename T> CXCYWH<T> convert_box(const XYXY<T> box, xyxy_tag, cxcywh_t
     return result;
 }
 
-template<typename T> CXCYWH<T> convert_box(const XYWH<T> box, xywh_tag, cxcywh_tag)
+template<typename T> FN_QUAL CXCYWH<T> convert_box(const XYWH<T> box, xywh_tag, cxcywh_tag)
 {
     CXCYWH<T> result;
     result.cx = box.x + box.w * 0.5f;
@@ -76,7 +82,7 @@ template<typename T> CXCYWH<T> convert_box(const XYWH<T> box, xywh_tag, cxcywh_t
     return result;
 }
 
-template<typename T> XYXY<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xyxy_tag)
+template<typename T> FN_QUAL XYXY<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xyxy_tag)
 {
     XYXY<T> result;
     result.x1 = box.cx - box.w * 0.5f;
@@ -86,7 +92,7 @@ template<typename T> XYXY<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xyxy_t
     return result;
 }
 
-template<typename T> XYXY<T> convert_box(const XYWH<T> box, xywh_tag, xyxy_tag)
+template<typename T> FN_QUAL XYXY<T> convert_box(const XYWH<T> box, xywh_tag, xyxy_tag)
 {
     XYXY<T> result;
     result.x1 = box.x;
@@ -96,7 +102,7 @@ template<typename T> XYXY<T> convert_box(const XYWH<T> box, xywh_tag, xyxy_tag)
     return result;
 }
 
-template<typename T> XYWH<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xywh_tag)
+template<typename T> FN_QUAL XYWH<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xywh_tag)
 {
     XYWH<T> result;
     result.x = box.cx - box.w * 0.5f;
@@ -106,7 +112,7 @@ template<typename T> XYWH<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xywh_t
     return result;
 }
 
-template<typename T> XYWH<T> convert_box(const XYXY<T> box, xyxy_tag, xywh_tag)
+template<typename T> FN_QUAL XYWH<T> convert_box(const XYXY<T> box, xyxy_tag, xywh_tag)
 {
     XYWH<T> result;
     result.x = box.x1;
@@ -115,3 +121,5 @@ template<typename T> XYWH<T> convert_box(const XYXY<T> box, xyxy_tag, xywh_tag)
     result.h = box.y2 - box.y1;
     return result;
 }
+
+#undef FN_QUAL
