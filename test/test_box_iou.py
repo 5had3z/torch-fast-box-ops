@@ -4,7 +4,7 @@ from torch.nn import functional as F
 from torchvision.ops.boxes import box_area as tv_box_area
 from torch_fast_box_ops import box_area as tfbo_box_area
 
-from utils import get_atol, make_random_boxes
+from utils import make_random_boxes
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -16,7 +16,7 @@ def test_box_area(device: str, dtype: torch.dtype):
     tv_area = tv_box_area(boxes).to(dtype=dtype)
     tfbo_area = tfbo_box_area(boxes)
 
-    assert torch.allclose(tv_area[..., None], tfbo_area, atol=get_atol(dtype))
+    torch.testing.assert_close(tfbo_area, tv_area[..., None])
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -47,6 +47,4 @@ def test_box_area_backward(device: str, dtype: torch.dtype):
     F.mse_loss(tfbo_area, random_targets).backward()
 
     # Check gradients
-    assert torch.allclose(
-        tfo_grad, tv_grad, atol=get_atol(dtype)
-    ), f"Backward gradients do not match: {tfo_grad} != {tv_grad}"
+    torch.testing.assert_close(tfo_grad, tv_grad)

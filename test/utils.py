@@ -1,11 +1,6 @@
 import torch
 
 
-def get_atol(dtype: torch.dtype) -> float:
-    """Get appropriate absolute tolerance based on dtype."""
-    return torch.finfo(dtype).eps * 200
-
-
 def make_random_boxes(
     fmt: str, num_boxes: int, dtype: torch.dtype, device: str, normalized: bool = False
 ) -> torch.Tensor:
