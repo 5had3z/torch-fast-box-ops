@@ -72,3 +72,31 @@ def box_area(boxes: Tensor) -> Tensor:
         Tensor: Areas of the bounding boxes.
     """
     return torch.ops.box_ops.box_area(boxes)
+
+
+def _loss_inter_union(boxes1: Tensor, boxes2: Tensor) -> tuple[Tensor, Tensor]:
+    """
+    Compute intersection and union areas for two sets of boxes.
+
+    Args:
+        boxes1 (Tensor): First set of boxes.
+        boxes2 (Tensor): Second set of boxes.
+
+    Returns:
+        tuple: Intersection and union areas.
+    """
+    return torch.ops.box_ops.loss_inter_union(boxes1, boxes2)
+
+
+def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
+    """
+    Compute the Intersection over Union (IoU) for two sets of bounding boxes.
+
+    Args:
+        boxes1 (Tensor): First set of boxes in format [x1, y1, x2, y2].
+        boxes2 (Tensor): Second set of boxes in format [x1, y1, x2, y2].
+
+    Returns:
+        Tensor: IoU values for each pair of boxes.
+    """
+    return torch.ops.box_ops.box_iou(boxes1, boxes2)

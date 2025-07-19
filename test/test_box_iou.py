@@ -1,8 +1,8 @@
 import pytest
 import torch
 from torch.nn import functional as F
-from torchvision.ops.boxes import box_area as tv_box_area
-from torch_fast_box_ops import box_area as tfbo_box_area
+from torchvision.ops.boxes import box_area as tv_box_area, box_iou as tv_box_iou
+from torch_fast_box_ops import box_area as tfbo_box_area, box_iou as tfbo_box_iou
 
 from utils import make_random_boxes
 
@@ -48,3 +48,31 @@ def test_box_area_backward(device: str, dtype: torch.dtype):
 
     # Check gradients
     torch.testing.assert_close(tfo_grad, tv_grad)
+
+
+@pytest.mark.parametrize("device", ["cpu"])
+@pytest.mark.parametrize("num_batch", [1, 4])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
+)
+def test_box_iou(device: str, num_batch: int, dtype: torch.dtype):
+    boxes1 = make_random_boxes(
+        "xyxy", 10, dtype=dtype, device=device, num_batch=num_batch
+    )
+    boxes2 = make_random_boxes(
+        "xyxy", 12, dtype=dtype, device=device, num_batch=num_batch
+    )
+
+    if num_batch > 1:
+        tv_iou = torch.stack([tv_box_iou(b1, b2) for b1, b2 in zip(boxes1, boxes2)])
+    else:
+        tv_iou = tv_box_iou(boxes1, boxes2)
+
+    tfbo_iou = tfbo_box_iou(boxes1, boxes2)
+
+    if dtype == torch.float16:
+        # Torchvision's box_iou has issues with float16 precision
+        tv_iou = tv_iou.to(dtype=dtype)
+        torch.testing.assert_close(tfbo_iou, tv_iou, rtol=5e-3, atol=5e-5)
+    else:
+        torch.testing.assert_close(tfbo_iou, tv_iou)
