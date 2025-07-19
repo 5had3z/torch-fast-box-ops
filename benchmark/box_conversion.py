@@ -38,6 +38,7 @@ def benchmark_box_conversion(
 
     # Warm-up
     _ = tfbo_box_convert(boxes, in_fmt, out_fmt)
+    _ = tv_box_convert(boxes, in_fmt, out_fmt)
 
     # Benchmark
     tfbo = timeit.timeit(lambda: tfbo_box_convert(boxes, in_fmt, out_fmt), number=1000)
@@ -64,11 +65,10 @@ def run_benchmarks():
         for dtype in dtypes:
             for in_fmt in formats:
                 for out_fmt in formats:
-                    if in_fmt != out_fmt:  # Skip same format conversions
-                        result = benchmark_box_conversion(
-                            device, dtype, in_fmt, out_fmt
-                        )
-                        results.append(result)
+                    if in_fmt == out_fmt:  # Skip same format conversions
+                        continue
+                    result = benchmark_box_conversion(device, dtype, in_fmt, out_fmt)
+                    results.append(result)
 
     df = pd.DataFrame([r.__dict__ for r in results])
     df["speedup"] = df["time_tv"] / df["time_tfbo"]

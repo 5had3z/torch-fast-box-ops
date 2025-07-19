@@ -8,18 +8,7 @@ from torchvision.ops import generalized_box_iou_loss, complete_box_iou_loss
 from torch_fast_box_ops import box_convert as tfbo_box_convert
 
 
-def make_random_boxes(
-    in_fmt: str, num_boxes: int, dtype: torch.dtype, device: str
-) -> torch.Tensor:
-    """Generate random bounding boxes in the specified format."""
-    if in_fmt == "xyxy":
-        rand_xy = torch.rand(num_boxes, 2) * 100
-        rand_wh = torch.rand(num_boxes, 2) * 50
-        boxes = torch.cat([rand_xy, rand_xy + rand_wh], dim=-1)
-    else:
-        boxes = torch.rand(num_boxes, 4) * 100
-    boxes = boxes.to(dtype=dtype, device=device)
-    return boxes
+from utils import get_atol, make_random_boxes
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -28,8 +17,7 @@ def make_random_boxes(
 @pytest.mark.parametrize("out_fmt", ["xyxy", "xywh", "cxcywh"])
 def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype):
     """Test box conversion for various formats and data types, both forward and backward."""
-    torch.manual_seed(0)
-    tfo_boxes = make_random_boxes(in_fmt, 100, dtype, device)
+    tfo_boxes = make_random_boxes(in_fmt, 100, dtype, device, normalized=False)
     tv_boxes = tfo_boxes.clone()
 
     tfo_boxes.requires_grad = True
@@ -43,9 +31,8 @@ def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype)
     converted = tfbo_box_convert(tfo_boxes, in_fmt, out_fmt)
     expected = tv_box_convert(tfo_boxes, in_fmt, out_fmt).to(dtype)
 
-    atol = 2e-1 if dtype == torch.float16 else 1e-5
     assert torch.allclose(
-        converted, expected, atol=atol
+        converted, expected, atol=get_atol(dtype)
     ), f"Conversion Failed {converted} != {expected}"
 
     scales = torch.tensor([1.0, 2.0, 3.0, 4.0], device=device, dtype=dtype)
@@ -55,7 +42,7 @@ def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype)
     F.mse_loss(tfo_boxes, fake_target).backward()
 
     assert torch.allclose(
-        tfo_grad, tv_grad, atol=atol
+        tfo_grad, tv_grad, atol=get_atol(dtype)
     ), f"Backward Failed {tfo_grad} != {tv_grad}"
 
 
@@ -64,7 +51,6 @@ def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype)
 @pytest.mark.parametrize("grad_fn", [generalized_box_iou_loss, complete_box_iou_loss])
 def test_box_convert_gradients(device: str, in_fmt: str, grad_fn):
     """Test gradients for box conversion using different loss functions."""
-    torch.manual_seed(0)
     tfo_boxes = make_random_boxes(in_fmt, 100, torch.float32, device)
     tv_boxes = tfo_boxes.clone()
 
@@ -99,7 +85,6 @@ def test_box_convert_gradients(device: str, in_fmt: str, grad_fn):
 @pytest.mark.parametrize("out_fmt", ["xyxy", "xywh", "cxcywh"])
 def test_box_convert_int32(device: str, in_fmt: str, out_fmt: str):
     """Test box conversion with integer types"""
-    torch.manual_seed(0)
     dtype = torch.int32
     random_boxes = make_random_boxes(in_fmt, 100, dtype, device)
 

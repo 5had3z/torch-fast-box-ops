@@ -209,7 +209,7 @@ auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, 
     cudaStream_t stream = nullptr;
     if (is_cuda) { stream = at::cuda::getCurrentCUDAStream(); }
 
-    AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, input.scalar_type(), "box_convert_forward", [&] {
+    TFBO_DISPATCH_BOX_TYPES(input.scalar_type(), "box_convert_forward", [&] {
         static const std::map<ConversionKey, BoxConverter<scalar_t>> converters = {
             { { "xyxy", "cxcywh" }, make_forward_converter<scalar_t, XYXY, CXCYWH>() },
             { { "xywh", "cxcywh" }, make_forward_converter<scalar_t, XYWH, CXCYWH>() },
@@ -223,7 +223,7 @@ auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, 
         auto it = converters.find(key);
         if (it == converters.end()) { throw std::invalid_argument("Unsupported format conversion"); }
 
-        it->second(input.data_ptr(), output.data_ptr(), numBoxes, is_cuda, stream);
+        it->second(input.const_data_ptr(), output.mutable_data_ptr(), numBoxes, is_cuda, stream);
     });
 
     return output;
@@ -240,8 +240,9 @@ auto make_backward_converter()
         using OutBoxType = typename box_tag_map<OutBox>::type;
 
         if (is_cuda) {
+            const auto num_threads = 256;
             box_conversion_backward_kernel<T, InBox, OutBox>
-                <<<cuda::ceil_div(n, 256), 256, 0>>>(output_grad, input_grad, n);
+                <<<cuda::ceil_div(n, num_threads), num_threads, 0, stream>>>(output_grad, input_grad, n);
         } else {
             std::transform(output_grad, output_grad + n, input_grad, [](const OutBox<T> in) {
                 return convert_box_grad(in, InBoxType{}, OutBoxType{});
@@ -266,7 +267,7 @@ auto box_convert_backward(const torch::Tensor &out_grad, const std::string &in_f
     cudaStream_t stream = nullptr;
     if (is_cuda) { stream = at::cuda::getCurrentCUDAStream(); }
 
-    AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, out_grad.scalar_type(), "box_convert_backward", [&] {
+    TFBO_DISPATCH_BOX_TYPES(out_grad.scalar_type(), "box_convert_backward", [&] {
         static const std::map<ConversionKey, BoxConverter<scalar_t>> converters = {
             { { "cxcywh", "xyxy" }, make_backward_converter<scalar_t, CXCYWH, XYXY>() },
             { { "xywh", "xyxy" }, make_backward_converter<scalar_t, XYWH, XYXY>() },
@@ -280,7 +281,7 @@ auto box_convert_backward(const torch::Tensor &out_grad, const std::string &in_f
         auto it = converters.find(key);
         if (it == converters.end()) { throw std::invalid_argument("Unsupported format conversion"); }
 
-        it->second(out_grad.data_ptr(), output.data_ptr(), numBoxes, is_cuda, stream);
+        it->second(out_grad.const_data_ptr(), output.mutable_data_ptr(), numBoxes, is_cuda, stream);
     });
 
     return output;

@@ -1,4 +1,4 @@
-"""Pytorch Faster Box Opersations"""
+"""Pytorch Faster Box Operations"""
 
 from pathlib import Path
 
@@ -43,3 +43,32 @@ def box_convert(boxes: Tensor, in_fmt: str, out_fmt: str) -> Tensor:
         Tensor: Bounding boxes in the output format.
     """
     return torch.ops.box_ops.box_convert(boxes, in_fmt, out_fmt)
+
+
+def _box_area_context(ctx, inputs: tuple[Tensor, str, str], output: Tensor):
+    """Save the boxes tensor for backward pass."""
+    ctx.save_for_backward(inputs[0])
+
+
+def _box_area_backward(ctx, grad: Tensor):
+    (boxes,) = ctx.saved_tensors
+    grad_input = torch.ops.box_ops.box_area_backward(grad, boxes)
+    return grad_input
+
+
+torch.library.register_autograd(
+    "box_ops::box_area", _box_area_backward, setup_context=_box_area_context
+)
+
+
+def box_area(boxes: Tensor) -> Tensor:
+    """
+    Compute the area of bounding boxes.
+
+    Args:
+        boxes (Tensor): Bounding boxes in the format [x1, y1, x2, y2].
+
+    Returns:
+        Tensor: Areas of the bounding boxes.
+    """
+    return torch.ops.box_ops.box_area(boxes)

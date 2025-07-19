@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ATen/Dispatch.h>
+
 template<typename T> struct XYXY
 {
     using value_type = T;
@@ -55,3 +57,13 @@ template<> struct box_tag_map<CXCYWH>
 {
     using type = cxcywh_tag;
 };
+
+#define TFBO_DISPATCH_CASE_BOX_TYPES(...)                   \
+    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__)    \
+    AT_DISPATCH_CASE(at::ScalarType::Double, __VA_ARGS__)   \
+    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)     \
+    AT_DISPATCH_CASE(at::ScalarType::BFloat16, __VA_ARGS__) \
+    AT_DISPATCH_CASE(at::ScalarType::Int, __VA_ARGS__)
+
+#define TFBO_DISPATCH_BOX_TYPES(TYPE, NAME, ...) \
+    AT_DISPATCH_SWITCH(TYPE, NAME, TFBO_DISPATCH_CASE_BOX_TYPES(__VA_ARGS__))
