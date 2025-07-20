@@ -85,7 +85,7 @@ def _loss_inter_union(boxes1: Tensor, boxes2: Tensor) -> tuple[Tensor, Tensor]:
     Returns:
         tuple: Intersection and union areas.
     """
-    return torch.ops.box_ops.loss_inter_union(boxes1, boxes2)
+    return torch.ops.box_ops._loss_inter_union(boxes1, boxes2)
 
 
 def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:

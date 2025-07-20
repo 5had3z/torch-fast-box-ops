@@ -4,6 +4,7 @@
 #include <cuda/cmath>
 
 #include "boxes.cuh"
+#include "kernel.cuh"
 
 #ifdef __CUDACC__
 #define FN_QUAL __host__ __device__
@@ -12,12 +13,6 @@
 #endif
 
 template<typename T> FN_QUAL auto box_area_op(const XYXY<T> &box) -> T { return (box.x2 - box.x1) * (box.y2 - box.y1); }
-
-template<typename T> __global__ void box_area_kernel(const XYXY<T> *boxes, T *output, int64_t num_boxes)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < num_boxes) { output[idx] = box_area_op(boxes[idx]); }
-}
 
 auto box_area(const torch::Tensor &boxes) -> torch::Tensor
 {
@@ -36,10 +31,8 @@ auto box_area(const torch::Tensor &boxes) -> torch::Tensor
         auto areas_ptr = output.mutable_data_ptr<scalar_t>();
 
         if (boxes.is_cuda()) {
-            auto stream = at::cuda::getCurrentCUDAStream();
-            const auto num_threads = 256;
-            box_area_kernel<scalar_t>
-                <<<cuda::ceil_div(num_boxes, num_threads), num_threads, 0, stream>>>(boxes_ptr, areas_ptr, num_boxes);
+            auto kernel = [=] __device__(int idx) { areas_ptr[idx] = box_area_op(boxes_ptr[idx]); };
+            launch_elementwise_kernel(kernel, num_boxes, at::cuda::getCurrentCUDAStream());
         } else {
             std::transform(boxes_ptr, boxes_ptr + num_boxes, areas_ptr, box_area_op<scalar_t>);
         }
@@ -58,16 +51,6 @@ template<typename T> auto FN_QUAL box_area_backward_(T grad, XYXY<T> box) -> XYX
     return grad_box;
 }
 
-template<typename T>
-__global__ void box_area_backward_kernel(const T *__restrict__ grad,
-    const XYXY<T> *__restrict__ boxes,
-    XYXY<T> *input_grad,
-    int64_t num_boxes)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < num_boxes) { input_grad[idx] = box_area_backward_(grad[idx], boxes[idx]); }
-}
-
 auto box_area_backward(const torch::Tensor &grad, const torch::Tensor &boxes) -> torch::Tensor
 {
     TORCH_CHECK(grad.is_contiguous(), "Gradient tensor must be contiguous");
@@ -81,10 +64,9 @@ auto box_area_backward(const torch::Tensor &grad, const torch::Tensor &boxes) ->
         auto input_grad_ptr = static_cast<XYXY<scalar_t> *>(input_grad.mutable_data_ptr());
 
         if (boxes.is_cuda()) {
-            auto stream = at::cuda::getCurrentCUDAStream();
-            const auto num_threads = 256;
-            box_area_backward_kernel<scalar_t><<<cuda::ceil_div(grad.numel(), num_threads), num_threads, 0, stream>>>(
-                grad_ptr, boxes_ptr, input_grad_ptr, grad.numel());
+            auto kernel = [=] __device__(
+                              int idx) { input_grad_ptr[idx] = box_area_backward_(grad_ptr[idx], boxes_ptr[idx]); };
+            launch_elementwise_kernel(kernel, grad.numel(), at::cuda::getCurrentCUDAStream());
         } else {
             std::transform(grad_ptr, grad_ptr + grad.numel(), boxes_ptr, input_grad_ptr, box_area_backward_<scalar_t>);
         }
@@ -135,7 +117,40 @@ void box_iou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
     });
 }
 
-void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output) {}
+template<typename T, typename U = std::conditional_t<std::is_integral_v<T>, float, T>>
+__global__ void
+    box_iou_kernel(const XYXY<T> *__restrict__ boxes1, const XYXY<T> *__restrict__ boxes2, U *output, int N, int M)
+{
+    int b = blockIdx.x;
+    for (int n = threadIdx.y; n < N; n += blockDim.y) {
+        const auto &box1 = boxes1[b * N + n];
+        const auto area1 = box_area_op(box1);
+        for (int m = threadIdx.x; m < M; m += blockDim.x) {
+            const auto &box2 = boxes2[b * M + m];
+            auto intersection = static_cast<U>(box_intersection(box1, box2));
+            auto union_area = static_cast<U>(area1 + box_area_op(box2) - intersection);
+            output[b * N * M + n * M + m] = intersection / union_area;
+        }
+    }
+}
+
+void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output)
+{
+    auto stream = at::cuda::getCurrentCUDAStream();
+    TFBO_DISPATCH_BOX_TYPES(boxes1.scalar_type(), "box_iou_gpu", [&] {
+        const uint B = boxes1.size(0);
+        const uint N = boxes1.size(1);
+        const uint M = boxes2.size(1);
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        auto output_ptr =
+            static_cast<std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t> *>(output.mutable_data_ptr());
+
+        auto block_dim = dim3(32, std::min(32u, N));
+        auto grid_dim = dim3(B);
+        box_iou_kernel<<<grid_dim, block_dim, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
+    });
+}
 
 auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
 {
@@ -181,11 +196,48 @@ auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch:
     return output;
 }
 
+auto loss_inter_union(const torch::Tensor &boxes1, const torch::Tensor &boxes2)
+    -> std::tuple<torch::Tensor, torch::Tensor>
+{
+    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
+    TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
+    TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
+
+    torch::Tensor intersection = boxes1.new_empty({ boxes1.size(0) });
+    torch::Tensor union_area = boxes1.new_empty({ boxes1.size(0) });
+
+    TFBO_DISPATCH_BOX_TYPES(boxes1.scalar_type(), "_loss_inter_union", [&] {
+        const auto num_boxes = boxes1.size(0);
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        auto intersection_ptr = static_cast<scalar_t *>(intersection.mutable_data_ptr());
+        auto union_area_ptr = static_cast<scalar_t *>(union_area.mutable_data_ptr());
+
+        if (boxes1.is_cuda()) {
+            auto kernel = [=] __device__(int idx) {
+                intersection_ptr[idx] = box_intersection(boxes1_ptr[idx], boxes2_ptr[idx]);
+                union_area_ptr[idx] =
+                    box_area_op(boxes1_ptr[idx]) + box_area_op(boxes2_ptr[idx]) - intersection_ptr[idx];
+            };
+            launch_elementwise_kernel(kernel, num_boxes, at::cuda::getCurrentCUDAStream());
+        } else {
+            for (std::size_t i = 0; i < num_boxes; ++i) {
+                intersection_ptr[i] = box_intersection(boxes1_ptr[i], boxes2_ptr[i]);
+                union_area_ptr[i] = box_area_op(boxes1_ptr[i]) + box_area_op(boxes2_ptr[i]) - intersection_ptr[i];
+            }
+        }
+    });
+
+
+    return { intersection, union_area };
+}
+
 TORCH_LIBRARY_IMPL(box_ops, CPU, m)
 {
     m.impl("box_iou", &box_iou);
     m.impl("box_area", &box_area);
     m.impl("box_area_backward", &box_area_backward);
+    m.impl("_loss_inter_union", &loss_inter_union);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
@@ -193,4 +245,5 @@ TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
     m.impl("box_iou", &box_iou);
     m.impl("box_area", &box_area);
     m.impl("box_area_backward", &box_area_backward);
+    m.impl("_loss_inter_union", &loss_inter_union);
 }

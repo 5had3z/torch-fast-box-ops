@@ -85,7 +85,7 @@ def run_benchmarks():
     print("\nAverage speedup:", df["speedup"].mean())
 
     results = []
-    for device in ["cpu"]:
+    for device in devices:
         for dtype in dtypes:
             result = benchmark_box_iou(device, dtype)
             results.append(result)

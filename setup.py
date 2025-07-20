@@ -23,7 +23,7 @@ if __name__ == "__main__":
                 targets,
                 extra_compile_args={
                     "cxx": ["-O3", "-std=c++17"],
-                    "nvcc": ["-O3", "-std=c++17"],
+                    "nvcc": ["-O3", "-std=c++17", "--extended-lambda"],
                 },
             )
         ],

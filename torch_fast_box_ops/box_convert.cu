@@ -4,6 +4,7 @@
 #include <cuda/cmath>
 
 #include "boxes.cuh"
+#include "kernel.cuh"
 
 
 #ifdef __CUDACC__
@@ -135,29 +136,6 @@ template<typename T> FN_QUAL XYXY<T> convert_box_grad(const XYWH<T> box, xyxy_ta
 #undef FN_QUAL
 
 
-template<typename T, template<typename> typename InBox, template<typename> typename OutBox>
-__global__ void box_conversion_forward_kernel(const InBox<T> *input, OutBox<T> *output, size_t n)
-{
-    using InBoxType = typename box_tag_map<InBox>::type;
-    using OutBoxType = typename box_tag_map<OutBox>::type;
-
-    const auto tid = blockIdx.x * blockDim.x + threadIdx.x;
-    for (size_t i = tid; i < n; i += blockDim.x * gridDim.x) {
-        output[i] = convert_box(input[i], InBoxType{}, OutBoxType{});
-    }
-}
-
-template<typename T, template<typename> typename InBox, template<typename> typename OutBox>
-__global__ void box_conversion_backward_kernel(const OutBox<T> *input, InBox<T> *output, size_t n)
-{
-    using InBoxType = typename box_tag_map<InBox>::type;
-    using OutBoxType = typename box_tag_map<OutBox>::type;
-    const auto tid = blockIdx.x * blockDim.x + threadIdx.x;
-    for (size_t i = tid; i < n; i += blockDim.x * gridDim.x) {
-        output[i] = convert_box_grad(input[i], InBoxType{}, OutBoxType{});
-    }
-}
-
 template<typename T> using BoxConverter = std::function<void(const void *, void *, size_t, bool, cudaStream_t)>;
 
 struct ConversionKey
@@ -173,7 +151,7 @@ struct ConversionKey
 };
 
 template<typename T, template<typename> typename InBox, template<typename> typename OutBox>
-auto make_forward_converter()
+auto make_forward_converter() -> BoxConverter<T>
 {
     return [](const void *input, void *output, size_t n, bool is_cuda, cudaStream_t stream = nullptr) {
         const auto input_data = static_cast<const InBox<T> *>(input);
@@ -183,8 +161,9 @@ auto make_forward_converter()
         using OutBoxType = typename box_tag_map<OutBox>::type;
 
         if (is_cuda) {
-            box_conversion_forward_kernel<T, InBox, OutBox>
-                <<<cuda::ceil_div(n, 256), 256, 0>>>(input_data, output_data, n);
+            auto kernel = [=] __device__(
+                              int idx) { output_data[idx] = convert_box(input_data[idx], InBoxType{}, OutBoxType{}); };
+            launch_elementwise_kernel(kernel, n, stream);
         } else {
             std::transform(input_data, input_data + n, output_data, [](const InBox<T> in) {
                 return convert_box(in, InBoxType{}, OutBoxType{});
@@ -230,7 +209,7 @@ auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, 
 }
 
 template<typename T, template<typename> typename InBox, template<typename> typename OutBox>
-auto make_backward_converter()
+auto make_backward_converter() -> BoxConverter<T>
 {
     return [](const void *input, void *output, size_t n, bool is_cuda, cudaStream_t stream = nullptr) {
         const auto output_grad = static_cast<const OutBox<T> *>(input);
@@ -240,9 +219,10 @@ auto make_backward_converter()
         using OutBoxType = typename box_tag_map<OutBox>::type;
 
         if (is_cuda) {
-            const auto num_threads = 256;
-            box_conversion_backward_kernel<T, InBox, OutBox>
-                <<<cuda::ceil_div(n, num_threads), num_threads, 0, stream>>>(output_grad, input_grad, n);
+            auto kernel = [=] __device__(int idx) {
+                input_grad[idx] = convert_box_grad(output_grad[idx], InBoxType{}, OutBoxType{});
+            };
+            launch_elementwise_kernel(kernel, n, stream);
         } else {
             std::transform(output_grad, output_grad + n, input_grad, [](const OutBox<T> in) {
                 return convert_box_grad(in, InBoxType{}, OutBoxType{});

@@ -2,7 +2,12 @@ import pytest
 import torch
 from torch.nn import functional as F
 from torchvision.ops.boxes import box_area as tv_box_area, box_iou as tv_box_iou
-from torch_fast_box_ops import box_area as tfbo_box_area, box_iou as tfbo_box_iou
+from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
+from torch_fast_box_ops import (
+    box_area as tfbo_box_area,
+    box_iou as tfbo_box_iou,
+    _loss_inter_union as tfbo_loss_inter_union,
+)
 
 from utils import make_random_boxes
 
@@ -50,7 +55,7 @@ def test_box_area_backward(device: str, dtype: torch.dtype):
     torch.testing.assert_close(tfo_grad, tv_grad)
 
 
-@pytest.mark.parametrize("device", ["cpu"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("num_batch", [1, 4])
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
@@ -76,3 +81,19 @@ def test_box_iou(device: str, num_batch: int, dtype: torch.dtype):
         torch.testing.assert_close(tfbo_iou, tv_iou, rtol=5e-3, atol=5e-5)
     else:
         torch.testing.assert_close(tfbo_iou, tv_iou)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_loss_inter_union(device: str):
+    boxes1 = make_random_boxes(
+        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+    )
+    boxes2 = make_random_boxes(
+        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+    )
+
+    tv_inter, tv_union = tv_loss_inter_union(boxes1, boxes2)
+    tfbo_inter, tfbo_union = tfbo_loss_inter_union(boxes1, boxes2)
+
+    torch.testing.assert_close(tfbo_inter, tv_inter)
+    torch.testing.assert_close(tfbo_union, tv_union)
