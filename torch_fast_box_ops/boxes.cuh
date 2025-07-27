@@ -2,31 +2,72 @@
 
 #include <ATen/Dispatch.h>
 
-template<typename T> struct XYXY
+template<typename T> struct box_aligned_size
 {
-    using value_type = T;
-    T x1;
-    T y1;
-    T x2;
-    T y2;
+    static constexpr size_t value = sizeof(T) * 4;
 };
 
-template<typename T> struct XYWH
+template<typename T, int N> struct aligned_type;
+
+template<> struct aligned_type<float, 4>
 {
-    using value_type = T;
-    T x;
-    T y;
-    T w;
-    T h;
+    using vec_t = float4;
 };
 
-template<typename T> struct CXCYWH
+template<> struct aligned_type<int32_t, 4>
+{
+    using vec_t = int4;
+};
+
+template<> struct aligned_type<c10::Half, 4>
+{
+    using vec_t = ushort4;// for half4
+};
+
+template<> struct aligned_type<c10::BFloat16, 4>
+{
+    using vec_t = ushort4;// for bfloat16
+};
+
+template<> struct aligned_type<double, 4>
+{
+    using vec_t = double4;
+};
+
+template<typename T> struct alignas(box_aligned_size<T>::value) XYXY
 {
     using value_type = T;
-    T cx;
-    T cy;
-    T w;
-    T h;
+    union {
+        struct
+        {
+            T x1, y1, x2, y2;
+        };
+        typename aligned_type<T, 4>::vec_t vec;// maps to float4, int4, etc.
+    };
+};
+
+template<typename T> struct alignas(box_aligned_size<T>::value) XYWH
+{
+    using value_type = T;
+    union {
+        struct
+        {
+            T x, y, w, h;
+        };
+        typename aligned_type<T, 4>::vec_t vec;// maps to float4, int4, etc.
+    };
+};
+
+template<typename T> struct alignas(box_aligned_size<T>::value) CXCYWH
+{
+    using value_type = T;
+    union {
+        struct
+        {
+            T cx, cy, w, h;
+        };
+        typename aligned_type<T, 4>::vec_t vec;// maps to float4, int4, etc.
+    };
 };
 
 

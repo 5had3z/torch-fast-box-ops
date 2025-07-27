@@ -140,12 +140,12 @@ template<typename T, typename U = std::conditional_t<std::is_integral_v<T>, floa
 __global__ void
     box_iou_kernel(const XYXY<T> *__restrict__ boxes1, const XYXY<T> *__restrict__ boxes2, U *output, int N, int M)
 {
-    int b = blockIdx.x;
-    for (int n = threadIdx.y; n < N; n += blockDim.y) {
-        const auto &box1 = boxes1[b * N + n];
+    int b = blockIdx.z;
+    for (int n = blockIdx.y * blockDim.y + threadIdx.y; n < N; n += blockDim.y * gridDim.y) {
+        const auto box1 = boxes1[b * N + n];
         const auto area1 = box_area_op(box1);
-        for (int m = threadIdx.x; m < M; m += blockDim.x) {
-            const auto &box2 = boxes2[b * M + m];
+        for (int m = blockIdx.x * blockDim.x + threadIdx.x; m < M; m += blockDim.x * gridDim.x) {
+            const auto box2 = boxes2[b * M + m];
             auto intersection = static_cast<U>(box_intersection_area(box1, box2));
             auto union_area = static_cast<U>(area1 + box_area_op(box2) - intersection);
             output[b * N * M + n * M + m] = intersection / union_area;
@@ -166,7 +166,7 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
             static_cast<std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t> *>(output.mutable_data_ptr());
 
         auto block_dim = dim3(32, std::min(32u, N));
-        auto grid_dim = dim3(B);
+        auto grid_dim = dim3(cuda::ceil_div(M, block_dim.x), cuda::ceil_div(N, block_dim.y), B);
         box_iou_kernel<<<grid_dim, block_dim, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
     });
 }

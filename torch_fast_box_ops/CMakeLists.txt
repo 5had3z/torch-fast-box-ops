@@ -40,7 +40,7 @@ file(
 add_executable(box-ops-profile ${SOURCES})
 
 target_compile_options(box-ops-profile PUBLIC $<$<CONFIG:Debug>:$<$<COMPILE_LANGUAGE:CUDA>:-G;>>
-                                              $<$<CONFIG:RelWithDebInfo>:$<$<COMPILE_LANGUAGE:CUDA>:-G;>>)
+                                              $<$<CONFIG:RelWithDebInfo>:$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;>>)
 
 set_target_properties(box-ops-profile PROPERTIES CUDA_ARCHITECTURES "native")
 
