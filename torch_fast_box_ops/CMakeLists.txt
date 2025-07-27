@@ -44,6 +44,13 @@ target_compile_options(box-ops-profile PUBLIC $<$<CONFIG:Debug>:$<$<COMPILE_LANG
 
 set_target_properties(box-ops-profile PROPERTIES CUDA_ARCHITECTURES "native")
 
+target_compile_definitions(
+  box-ops-profile
+  PUBLIC __CUDA_NO_HALF_OPERATORS__
+         __CUDA_NO_HALF_CONVERSIONS__
+         __CUDA_NO_BFLOAT16_CONVERSIONS__
+         __CUDA_NO_HALF2_OPERATORS__)
+
 target_link_libraries(
   box-ops-profile
   PUBLIC ${TORCH_LIBRARIES}

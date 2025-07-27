@@ -74,6 +74,26 @@ def box_area(boxes: Tensor) -> Tensor:
     return torch.ops.box_ops.box_area(boxes)
 
 
+def _loss_inter_union_context(ctx, inputs: tuple[Tensor, Tensor], output: Tensor):
+    """Save the boxes tensors for backward pass."""
+    ctx.save_for_backward(inputs[0], inputs[1])
+
+
+def _loss_inter_union_backward(ctx, grad_inter: Tensor, grad_union: Tensor):
+    (boxes1, boxes2) = ctx.saved_tensors
+    grad_box1, grad_box2 = torch.ops.box_ops._loss_inter_union_backward(
+        grad_inter, grad_union, boxes1, boxes2
+    )
+    return grad_box1, grad_box2
+
+
+torch.library.register_autograd(
+    "box_ops::_loss_inter_union",
+    _loss_inter_union_backward,
+    setup_context=_loss_inter_union_context,
+)
+
+
 def _loss_inter_union(boxes1: Tensor, boxes2: Tensor) -> tuple[Tensor, Tensor]:
     """
     Compute intersection and union areas for two sets of boxes.

@@ -21,12 +21,7 @@ def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype)
     tv_boxes = tfo_boxes.clone()
 
     tfo_boxes.requires_grad = True
-    tfo_grad = torch.empty_like(tfo_boxes)
-    tfo_boxes.register_hook(tfo_grad.copy_)
-
     tv_boxes.requires_grad = True
-    tv_grad = torch.empty_like(tv_boxes)
-    tv_boxes.register_hook(tv_grad.copy_)
 
     converted = tfbo_box_convert(tfo_boxes, in_fmt, out_fmt)
     expected = tv_box_convert(tfo_boxes, in_fmt, out_fmt).to(dtype)
@@ -43,7 +38,7 @@ def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype)
         return
 
     torch.testing.assert_close(converted, expected)
-    torch.testing.assert_close(tfo_grad, tv_grad)
+    torch.testing.assert_close(tfo_boxes.grad, tv_boxes.grad)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

@@ -27,22 +27,16 @@ def test_box_area(device: str, dtype: torch.dtype):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.float16])
 def test_box_area_backward(device: str, dtype: torch.dtype):
-    tfo_boxes = make_random_boxes(
+    tfbo_boxes = make_random_boxes(
         "xyxy", 10, dtype=dtype, device=device, normalized=True
     )
-    tv_boxes = tfo_boxes.clone()
-
-    tfo_boxes.requires_grad = True
-    tfo_grad = torch.empty_like(tfo_boxes)
-    tfo_boxes.register_hook(tfo_grad.copy_)
-
+    tv_boxes = tfbo_boxes.clone()
     tv_boxes.requires_grad = True
-    tv_grad = torch.empty_like(tv_boxes)
-    tv_boxes.register_hook(tv_grad.copy_)
+    tfbo_boxes.requires_grad = True
 
     # Forward pass
     tv_area = tv_box_area(tv_boxes).to(dtype=dtype)
-    tfbo_area = tfbo_box_area(tfo_boxes)[..., 0]
+    tfbo_area = tfbo_box_area(tfbo_boxes)[..., 0]
 
     with torch.no_grad():
         random_targets = torch.normal(tv_area, std=0.5).to(dtype=dtype, device=device)
@@ -52,7 +46,7 @@ def test_box_area_backward(device: str, dtype: torch.dtype):
     F.mse_loss(tfbo_area, random_targets).backward()
 
     # Check gradients
-    torch.testing.assert_close(tfo_grad, tv_grad)
+    torch.testing.assert_close(tfbo_boxes.grad, tv_boxes.grad)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -97,3 +91,35 @@ def test_loss_inter_union(device: str):
 
     torch.testing.assert_close(tfbo_inter, tv_inter)
     torch.testing.assert_close(tfbo_union, tv_union)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.float16])
+def test_loss_inter_union_backward(device: str, dtype: torch.dtype):
+    boxes1_tfbo = make_random_boxes(
+        "xyxy", 10, dtype=dtype, device=device, normalized=True, seed=0
+    )
+    boxes2_tfbo = make_random_boxes(
+        "xyxy", 10, dtype=dtype, device=device, normalized=True, seed=1
+    )
+
+    boxes1_tv = boxes1_tfbo.clone()
+    boxes2_tv = boxes2_tfbo.clone()
+
+    boxes1_tfbo.requires_grad = True
+    boxes2_tfbo.requires_grad = True
+    boxes1_tv.requires_grad = True
+    boxes2_tv.requires_grad = True
+
+    tv_inter, tv_union = tv_loss_inter_union(boxes1_tv, boxes2_tv)
+    tfbo_inter, tfbo_union = tfbo_loss_inter_union(boxes1_tfbo, boxes2_tfbo)
+    torch.testing.assert_close(tfbo_inter, tv_inter)
+    torch.testing.assert_close(tfbo_union, tv_union)
+
+    # Create random gradients for backward pass
+    (1 - tv_inter / tv_union).sum().backward()
+    (1 - tfbo_inter / tfbo_union).sum().backward()
+
+    # Check gradients
+    torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad)
+    torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad)
