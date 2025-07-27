@@ -30,11 +30,13 @@ template<class F> __global__ void kernel(F f, std::size_t num_element)
 template<typename KernelFunc>
 static void launch_elementwise_kernel(KernelFunc lambda, size_t num_elements, cudaStream_t stream)
 {
+    if (num_elements == 0) { return; }// No work
     int min_grid_size = 0;
     int block_size = 0;
 
     // Let CUDA calculate the optimal block size
     cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &block_size, kernel<KernelFunc>);
 
-    kernel<<<cuda::ceil_div(num_elements, block_size), block_size, 0, stream>>>(lambda, num_elements);
+    kernel<<<cuda::ceil_div(num_elements, static_cast<size_t>(block_size)), block_size, 0, stream>>>(
+        lambda, num_elements);
 }
