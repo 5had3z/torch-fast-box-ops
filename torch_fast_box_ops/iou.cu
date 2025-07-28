@@ -136,21 +136,32 @@ void box_iou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
     });
 }
 
+
+constexpr int box_iou_block_size_x = 32;
+constexpr int box_iou_block_size_y = 16;
+
 template<typename T, typename U = std::conditional_t<std::is_integral_v<T>, float, T>>
 __global__ void
     box_iou_kernel(const XYXY<T> *__restrict__ boxes1, const XYXY<T> *__restrict__ boxes2, U *output, int N, int M)
 {
+    __shared__ XYXY<T> shared_boxes1[box_iou_block_size_y];
+    __shared__ XYXY<T> shared_boxes2[box_iou_block_size_x];
+
     int b = blockIdx.z;
-    for (int n = blockIdx.y * blockDim.y + threadIdx.y; n < N; n += blockDim.y * gridDim.y) {
-        const auto box1 = boxes1[b * N + n];
-        const auto area1 = box_area_op(box1);
-        for (int m = blockIdx.x * blockDim.x + threadIdx.x; m < M; m += blockDim.x * gridDim.x) {
-            const auto box2 = boxes2[b * M + m];
-            auto intersection = static_cast<U>(box_intersection_area(box1, box2));
-            auto union_area = static_cast<U>(area1 + box_area_op(box2) - intersection);
-            output[b * N * M + n * M + m] = intersection / union_area;
-        }
+    int n = blockIdx.y * blockDim.y + threadIdx.y;
+    int m = blockIdx.x * blockDim.x + threadIdx.x;
+    if (n >= N || m >= M) return;// Prevent out-of-bounds access
+    if (threadIdx.y == 0) { shared_boxes2[threadIdx.x] = boxes2[b * M + m]; }
+    if (threadIdx.y == 1 && threadIdx.x < blockDim.y) {
+        shared_boxes1[threadIdx.x] = boxes1[b * N + blockIdx.y * blockDim.y + threadIdx.x];
     }
+    __syncthreads();
+    const auto box2 = shared_boxes2[threadIdx.x];
+    const auto box1 = shared_boxes1[threadIdx.y];
+    const auto area1 = box_area_op(box1);
+    auto intersection = static_cast<U>(box_intersection_area(box1, box2));
+    auto union_area = static_cast<U>(area1 + box_area_op(box2) - intersection);
+    output[b * N * M + n * M + m] = intersection / union_area;
 }
 
 void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output)
@@ -165,7 +176,7 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
         auto output_ptr =
             static_cast<std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t> *>(output.mutable_data_ptr());
 
-        auto block_dim = dim3(32, std::min(32u, N));
+        auto block_dim = dim3(box_iou_block_size_x, box_iou_block_size_y);
         auto grid_dim = dim3(cuda::ceil_div(M, block_dim.x), cuda::ceil_div(N, block_dim.y), B);
         box_iou_kernel<<<grid_dim, block_dim, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
     });

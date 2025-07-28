@@ -54,12 +54,13 @@ def test_box_area_backward(device: str, dtype: torch.dtype):
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
 )
-def test_box_iou(device: str, num_batch: int, dtype: torch.dtype):
+@pytest.mark.parametrize("num_boxes", [(10, 12), (31, 32), (91, 318)])
+def test_box_iou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tuple):
     boxes1 = make_random_boxes(
-        "xyxy", 10, dtype=dtype, device=device, num_batch=num_batch
+        "xyxy", num_boxes[0], dtype=dtype, device=device, num_batch=num_batch, seed=0
     )
     boxes2 = make_random_boxes(
-        "xyxy", 12, dtype=dtype, device=device, num_batch=num_batch
+        "xyxy", num_boxes[1], dtype=dtype, device=device, num_batch=num_batch, seed=1
     )
 
     if num_batch > 1:
@@ -73,6 +74,8 @@ def test_box_iou(device: str, num_batch: int, dtype: torch.dtype):
         # Torchvision's box_iou has issues with float16 precision
         tv_iou = tv_iou.to(dtype=dtype)
         torch.testing.assert_close(tfbo_iou, tv_iou, rtol=5e-3, atol=5e-5)
+    elif dtype == torch.int32:
+        torch.testing.assert_close(tfbo_iou, tv_iou, equal_nan=True)
     else:
         torch.testing.assert_close(tfbo_iou, tv_iou)
 
