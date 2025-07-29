@@ -6,11 +6,6 @@
 #include "boxes.cuh"
 #include "kernel.cuh"
 
-#ifdef __CUDACC__
-#define FN_QUAL __host__ __device__
-#else
-#define FN_QUAL
-#endif
 
 template<typename T> FN_QUAL auto box_area_op(const XYXY<T> &box) -> T { return (box.x2 - box.x1) * (box.y2 - box.y1); }
 
@@ -31,7 +26,7 @@ auto box_area(const torch::Tensor &boxes) -> torch::Tensor
         auto areas_ptr = output.mutable_data_ptr<scalar_t>();
 
         if (boxes.is_cuda()) {
-            auto kernel = [=] __device__(int idx) { areas_ptr[idx] = box_area_op(boxes_ptr[idx]); };
+            auto kernel = [=] __device__(unsigned int idx) { areas_ptr[idx] = box_area_op(boxes_ptr[idx]); };
             launch_elementwise_kernel(kernel, num_boxes, at::cuda::getCurrentCUDAStream());
         } else {
             std::transform(boxes_ptr, boxes_ptr + num_boxes, areas_ptr, box_area_op<scalar_t>);
@@ -74,8 +69,9 @@ auto box_area_backward(const torch::Tensor &grad, const torch::Tensor &boxes) ->
         auto input_grad_ptr = static_cast<XYXY<scalar_t> *>(input_grad.mutable_data_ptr());
 
         if (boxes.is_cuda()) {
-            auto kernel = [=] __device__(
-                              int idx) { input_grad_ptr[idx] = box_area_backward_(grad_ptr[idx], boxes_ptr[idx]); };
+            auto kernel = [=] __device__(unsigned int idx) {
+                input_grad_ptr[idx] = box_area_backward_(grad_ptr[idx], boxes_ptr[idx]);
+            };
             launch_elementwise_kernel(kernel, grad.numel(), at::cuda::getCurrentCUDAStream());
         } else {
             std::transform(grad_ptr, grad_ptr + grad.numel(), boxes_ptr, input_grad_ptr, box_area_backward_<scalar_t>);
@@ -141,15 +137,18 @@ constexpr int box_iou_block_size_x = 32;
 constexpr int box_iou_block_size_y = 16;
 
 template<typename T, typename U = std::conditional_t<std::is_integral_v<T>, float, T>>
-__global__ void
-    box_iou_kernel(const XYXY<T> *__restrict__ boxes1, const XYXY<T> *__restrict__ boxes2, U *output, int N, int M)
+__global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
+    const XYXY<T> *__restrict__ boxes2,
+    U *output,
+    unsigned int N,
+    unsigned int M)
 {
     __shared__ XYXY<T> shared_boxes1[box_iou_block_size_y];
     __shared__ XYXY<T> shared_boxes2[box_iou_block_size_x];
 
-    int b = blockIdx.z;
-    int n = blockIdx.y * blockDim.y + threadIdx.y;
-    int m = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int b = blockIdx.z;
+    unsigned int n = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned int m = blockIdx.x * blockDim.x + threadIdx.x;
     if (n >= N || m >= M) return;// Prevent out-of-bounds access
     if (threadIdx.y == 0) { shared_boxes2[threadIdx.x] = boxes2[b * M + m]; }
     if (threadIdx.y == 1 && threadIdx.x < blockDim.y) {
@@ -159,8 +158,8 @@ __global__ void
     const auto box2 = shared_boxes2[threadIdx.x];
     const auto box1 = shared_boxes1[threadIdx.y];
     const auto area1 = box_area_op(box1);
-    auto intersection = static_cast<U>(box_intersection_area(box1, box2));
-    auto union_area = static_cast<U>(area1 + box_area_op(box2) - intersection);
+    const auto intersection = static_cast<U>(box_intersection_area(box1, box2));
+    const auto union_area = static_cast<U>(area1 + box_area_op(box2) - intersection);
     output[b * N * M + n * M + m] = intersection / union_area;
 }
 
@@ -244,7 +243,7 @@ auto loss_inter_union(const torch::Tensor &boxes1, const torch::Tensor &boxes2)
         auto union_area_ptr = static_cast<scalar_t *>(union_area.mutable_data_ptr());
 
         if (boxes1.is_cuda()) {
-            auto kernel = [=] __device__(int idx) {
+            auto kernel = [=] __device__(unsigned int idx) {
                 intersection_ptr[idx] = box_intersection_area(boxes1_ptr[idx], boxes2_ptr[idx]);
                 union_area_ptr[idx] =
                     box_area_op(boxes1_ptr[idx]) + box_area_op(boxes2_ptr[idx]) - intersection_ptr[idx];
@@ -355,7 +354,7 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
         const auto grad_union_ptr = grad_union.const_data_ptr<scalar_t>();
 
         if (boxes1.is_cuda()) {
-            auto kernel = [=] __device__(int idx) {
+            auto kernel = [=] __device__(unsigned int idx) {
                 auto [grad_boxes1, grad_boxes2] =
                     inter_union_grad(grad_inter_ptr[idx], grad_union_ptr[idx], boxes1_ptr[idx], boxes2_ptr[idx]);
                 grad_boxes1_ptr[idx] = grad_boxes1;

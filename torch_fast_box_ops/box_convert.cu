@@ -7,12 +7,6 @@
 #include "kernel.cuh"
 
 
-#ifdef __CUDACC__
-#define FN_QUAL __host__ __device__
-#else
-#define FN_QUAL
-#endif
-
 template<typename T> FN_QUAL CXCYWH<T> convert_box(const XYXY<T> box, xyxy_tag, cxcywh_tag)
 {
     CXCYWH<T> result;
@@ -161,8 +155,9 @@ auto make_forward_converter() -> BoxConverter<T>
         using OutBoxType = typename box_tag_map<OutBox>::type;
 
         if (is_cuda) {
-            auto kernel = [=] __device__(
-                              int idx) { output_data[idx] = convert_box(input_data[idx], InBoxType{}, OutBoxType{}); };
+            auto kernel = [=] __device__(unsigned int idx) {
+                output_data[idx] = convert_box(input_data[idx], InBoxType{}, OutBoxType{});
+            };
             launch_elementwise_kernel(kernel, n, stream);
         } else {
             std::transform(input_data, input_data + n, output_data, [](const InBox<T> in) {
@@ -219,7 +214,7 @@ auto make_backward_converter() -> BoxConverter<T>
         using OutBoxType = typename box_tag_map<OutBox>::type;
 
         if (is_cuda) {
-            auto kernel = [=] __device__(int idx) {
+            auto kernel = [=] __device__(unsigned int idx) {
                 input_grad[idx] = convert_box_grad(output_grad[idx], InBoxType{}, OutBoxType{});
             };
             launch_elementwise_kernel(kernel, n, stream);

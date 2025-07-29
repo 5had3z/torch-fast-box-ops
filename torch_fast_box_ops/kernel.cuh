@@ -1,10 +1,13 @@
 #pragma once
 
-#include <cooperative_groups.h>
 #include <cuda/cmath>
 #include <cuda_occupancy.h>
 
-namespace cg = cooperative_groups;
+#ifdef __CUDACC__
+#define FN_QUAL __host__ __device__
+#else
+#define FN_QUAL
+#endif
 
 /**
  * @brief Launches a kernel that applies an elementwise operation over num_element.
@@ -13,7 +16,11 @@ namespace cg = cooperative_groups;
  * @param f The kernel function to launch.
  * @param num_element The total number of elements to process.
  */
-template<class F> __global__ void kernel(F f, std::size_t num_element) { f(blockIdx.x * blockDim.x + threadIdx.x); }
+template<class F> __global__ void kernel(F f, std::size_t num_element)
+{
+    auto idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < num_element) { f(idx); }
+}
 
 
 /***
