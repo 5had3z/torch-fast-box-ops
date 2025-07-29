@@ -7,18 +7,13 @@
 namespace cg = cooperative_groups;
 
 /**
- * @brief Launches a kernel with cooperative groups.
+ * @brief Launches a kernel that applies an elementwise operation over num_element.
  *
  * @tparam F The kernel function type.
  * @param f The kernel function to launch.
  * @param num_element The total number of elements to process.
  */
-template<class F> __global__ void kernel(F f, std::size_t num_element)
-{
-    auto grid = cg::this_grid();
-    auto block = cg::this_thread_block();
-    for (auto idx = grid.thread_rank(); idx < num_element; idx += grid.size()) { f(idx); }
-}
+template<class F> __global__ void kernel(F f, std::size_t num_element) { f(blockIdx.x * blockDim.x + threadIdx.x); }
 
 
 /***

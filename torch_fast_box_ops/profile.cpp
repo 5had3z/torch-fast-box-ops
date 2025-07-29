@@ -3,6 +3,8 @@
 #include <cxxopts.hpp>
 
 auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor;
+auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, const std::string &out_fmt)
+    -> torch::Tensor;
 
 int main(int argc, char *argv[])
 {
@@ -11,5 +13,6 @@ int main(int argc, char *argv[])
     auto boxes1 = torch::rand({ 16, 1000, 4 }, torch::kFloat32).cuda();
     auto boxes2 = torch::rand({ 16, 1000, 4 }, torch::kFloat32).cuda();
 
-    auto iou = box_iou(boxes1, boxes2);
+    // auto iou = box_iou(boxes1, boxes2);
+    box_convert_forward(boxes1, "cxcywh", "xyxy");
 }
