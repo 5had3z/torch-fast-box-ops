@@ -11,7 +11,7 @@ template<typename T> FN_QUAL auto box_area_op(const XYXY<T> &box) -> T { return 
 
 auto box_area(const torch::Tensor &boxes) -> torch::Tensor
 {
-    TORCH_CHECK(boxes.is_contiguous(), "Input tensor must be contiguous");
+    TORCH_CHECK(boxes.stride(-1) == 1, "Input tensor must be contiguous in last dimension");
     TORCH_CHECK(boxes.size(-1) == 4, "Input tensor must have shape (..., 4) for boxes");
 
     // Output shape is the same shape as input except the last dimension
@@ -58,8 +58,8 @@ template<typename T> auto FN_QUAL box_area_backward_(T grad, XYXY<T> box) -> XYX
 
 auto box_area_backward(const torch::Tensor &grad, const torch::Tensor &boxes) -> torch::Tensor
 {
-    TORCH_CHECK(grad.is_contiguous(), "Gradient tensor must be contiguous");
-    TORCH_CHECK(boxes.is_contiguous(), "Boxes tensor must be contiguous");
+    TORCH_CHECK(grad.stride(-1) == 1, "Gradient tensor must be contiguous in last dimension");
+    TORCH_CHECK(boxes.stride(-1) == 1, "Boxes tensor must be contiguous in last dimension");
     TORCH_CHECK(boxes.size(-1) == 4, "Boxes tensor must have shape (..., 4)");
 
     auto input_grad = torch::empty_like(boxes);
@@ -181,26 +181,9 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
     });
 }
 
-auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
+auto regularize_for_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2, const torch::Tensor &output)
+    -> std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 {
-    TORCH_CHECK(boxes1.is_contiguous(), "Input tensor boxes1 must be contiguous");
-    TORCH_CHECK(boxes2.is_contiguous(), "Input tensor boxes2 must be contiguous");
-    TORCH_CHECK(boxes1.size(-1) == 4, "Input tensor boxes1 must have shape (..., 4) for boxes");
-    TORCH_CHECK(boxes2.size(-1) == 4, "Input tensor boxes2 must have shape (..., 4) for boxes");
-    TORCH_CHECK(boxes1.ndimension() == boxes2.ndimension(),
-        "Input tensors boxes1 and boxes2 must have the same number of dimensions");
-    TORCH_CHECK(boxes1.ndimension() >= 2, "Input tensors boxes1 and boxes2 must have at least 2 dimensions");
-
-    auto output_shape = boxes1.sizes().vec();
-    output_shape.back() = boxes2.size(-2);// Replace '4' with the number of boxes in boxes2
-
-    auto opts = boxes1.options();
-    if (opts.dtype() == torch::kInt32) {
-        opts = opts.dtype(torch::kFloat32);// Ensure output is float for IoU
-    }
-    auto output = torch::empty(output_shape, opts);
-
-    // Regularize the shape to Batch x Nboxes x 4
     torch::Tensor boxes1_flat, boxes2_flat, output_flat;
     if (boxes1.ndimension() == 2) {
         boxes1_flat = boxes1.unsqueeze(0);
@@ -215,6 +198,33 @@ auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch:
         boxes2_flat = boxes2;
         output_flat = output;
     }
+    return { boxes1_flat, boxes2_flat, output_flat };
+}
+
+auto create_iou_output_tensor(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
+{
+    auto output_shape = boxes1.sizes().vec();
+    output_shape.back() = boxes2.size(-2);// Replace '4' with the number of boxes in boxes2
+    auto opts = boxes1.options();
+    if (opts.dtype() == torch::kInt32) {
+        opts = opts.dtype(torch::kFloat32);// Ensure output is float for IoU
+    }
+    return torch::empty(output_shape, opts);
+}
+
+auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
+{
+    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
+    TORCH_CHECK(boxes1.size(-1) == 4 && boxes2.size(-1) == 4, "Input tensors must have shape (..., 4) for boxes");
+    TORCH_CHECK(boxes1.ndimension() == boxes2.ndimension(),
+        "Input tensors boxes1 and boxes2 must have the same number of dimensions");
+    TORCH_CHECK(boxes1.ndimension() >= 2, "Input tensors boxes1 and boxes2 must have at least 2 dimensions");
+
+    auto output = create_iou_output_tensor(boxes1, boxes2);
+
+    // Regularize the shape to Batch x Nboxes x 4
+    torch::Tensor boxes1_flat, boxes2_flat, output_flat;
+    std::tie(boxes1_flat, boxes2_flat, output_flat) = regularize_for_iou(boxes1, boxes2, output);
 
     if (boxes1_flat.is_cuda()) {
         box_iou_gpu_impl(boxes1_flat, boxes2_flat, output_flat);
@@ -372,6 +382,82 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
     return { grad_boxes1, grad_boxes2 };
 }
 
+/**
+ * @brief Compute the minimum enclosing box of two boxes.
+ *
+ * @tparam T
+ * @param box1
+ * @param box2
+ * @return XYXY<T> minumum enclosing box that contains both box1 and box2.
+ */
+template<typename T> auto min_enclosing_box(const XYXY<T> &box1, const XYXY<T> &box2) -> XYXY<T>
+{
+    XYXY<T> enclosing_box;
+    enclosing_box.x1 = std::min(box1.x1, box2.x1);
+    enclosing_box.y1 = std::min(box1.y1, box2.y1);
+    enclosing_box.x2 = std::max(box1.x2, box2.x2);
+    enclosing_box.y2 = std::max(box1.y2, box2.y2);
+    return enclosing_box;
+}
+
+void giou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output)
+{
+    TFBO_DISPATCH_BOX_TYPES(boxes1.scalar_type(), "generalized_box_iou", [&] {
+        const auto B = boxes1.size(0);
+        const auto N = boxes1.size(1);
+        const auto M = boxes2.size(1);
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        auto output_ptr =
+            static_cast<std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t> *>(output.mutable_data_ptr());
+
+        for (int b = 0; b < B; ++b) {
+            for (int n = 0; n < N; ++n) {
+                const auto area1 = box_area_op(boxes1_ptr[b * N + n]);
+                for (int m = 0; m < M; ++m) {
+                    const auto area2 = box_area_op(boxes2_ptr[b * M + m]);
+                    const auto intersection = box_intersection_area(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
+                    const auto union_area = area1 + area2 - intersection;
+                    auto enclosing_box = min_enclosing_box(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
+                    auto enclosing_area = std::max(box_area_op(enclosing_box), static_cast<scalar_t>(0));
+
+                    if (std::is_integral_v<scalar_t>) {
+                        auto iou = static_cast<float>(intersection) / static_cast<float>(union_area);
+                        output_ptr[b * N * M + n * M + m] =
+                            iou - static_cast<float>(enclosing_area - union_area) / static_cast<float>(enclosing_area);
+                    } else {
+                        auto iou = intersection / union_area;
+                        output_ptr[b * N * M + n * M + m] = iou - (enclosing_area - union_area) / enclosing_area;
+                    }
+                }
+            }
+        }
+    });
+}
+
+auto generalized_box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
+{
+    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
+    TORCH_CHECK(boxes1.size(-1) == 4 && boxes2.size(-1) == 4, "Input tensors must have shape (..., 4) for boxes");
+    TORCH_CHECK(boxes1.ndimension() == boxes2.ndimension(),
+        "Input tensors boxes1 and boxes2 must have the same number of dimensions");
+    TORCH_CHECK(boxes1.ndimension() >= 2, "Input tensors boxes1 and boxes2 must have at least 2 dimensions");
+
+    auto output = create_iou_output_tensor(boxes1, boxes2);
+
+    // Regularize the shape to Batch x Nboxes x 4
+    torch::Tensor boxes1_flat, boxes2_flat, output_flat;
+    std::tie(boxes1_flat, boxes2_flat, output_flat) = regularize_for_iou(boxes1, boxes2, output);
+
+    if (boxes1_flat.is_cuda()) {
+        // Not implemented
+    } else {
+        giou_cpu_impl(boxes1_flat, boxes2_flat, output_flat);
+    }
+
+    return output;
+}
+
 TORCH_LIBRARY_IMPL(box_ops, CPU, m)
 {
     m.impl("box_iou", &box_iou);
@@ -379,6 +465,7 @@ TORCH_LIBRARY_IMPL(box_ops, CPU, m)
     m.impl("box_area_backward", &box_area_backward);
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
+    m.impl("generalized_box_iou", &generalized_box_iou);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)

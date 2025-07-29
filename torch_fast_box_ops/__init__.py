@@ -120,3 +120,17 @@ def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
         Tensor: IoU values for each pair of boxes.
     """
     return torch.ops.box_ops.box_iou(boxes1, boxes2)
+
+
+def generalized_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
+    """
+    Compute the Generalized Intersection over Union (GIoU) for two sets of bounding boxes.
+
+    Args:
+        boxes1 (Tensor): First set of boxes in format [x1, y1, x2, y2].
+        boxes2 (Tensor): Second set of boxes in format [x1, y1, x2, y2].
+
+    Returns:
+        Tensor: GIoU values for each pair of boxes.
+    """
+    return torch.ops.box_ops.generalized_box_iou(boxes1, boxes2)
