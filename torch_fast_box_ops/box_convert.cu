@@ -7,7 +7,7 @@
 #include "kernel.cuh"
 
 
-template<typename T> FN_QUAL CXCYWH<T> convert_box(const XYXY<T> box, xyxy_tag, cxcywh_tag)
+template<typename T> TFBO_HOST_DEVICE CXCYWH<T> convert_box(const XYXY<T> box, xyxy_tag, cxcywh_tag)
 {
     CXCYWH<T> result;
     result.cx = (box.x1 + box.x2) * 0.5f;
@@ -17,7 +17,7 @@ template<typename T> FN_QUAL CXCYWH<T> convert_box(const XYXY<T> box, xyxy_tag, 
     return result;
 }
 
-template<typename T> FN_QUAL XYXY<T> convert_box_grad(const CXCYWH<T> box, xyxy_tag, cxcywh_tag)
+template<typename T> TFBO_HOST_DEVICE XYXY<T> convert_box_grad(const CXCYWH<T> box, xyxy_tag, cxcywh_tag)
 {
     XYXY<T> result;
     result.x1 = 0.5f * box.cx - box.w;
@@ -27,7 +27,7 @@ template<typename T> FN_QUAL XYXY<T> convert_box_grad(const CXCYWH<T> box, xyxy_
     return result;
 }
 
-template<typename T> FN_QUAL CXCYWH<T> convert_box(const XYWH<T> box, xywh_tag, cxcywh_tag)
+template<typename T> TFBO_HOST_DEVICE CXCYWH<T> convert_box(const XYWH<T> box, xywh_tag, cxcywh_tag)
 {
     CXCYWH<T> result;
     result.cx = box.x + box.w * 0.5f;
@@ -37,7 +37,7 @@ template<typename T> FN_QUAL CXCYWH<T> convert_box(const XYWH<T> box, xywh_tag, 
     return result;
 }
 
-template<typename T> FN_QUAL XYWH<T> convert_box_grad(const CXCYWH<T> box, xywh_tag, cxcywh_tag)
+template<typename T> TFBO_HOST_DEVICE XYWH<T> convert_box_grad(const CXCYWH<T> box, xywh_tag, cxcywh_tag)
 {
     XYWH<T> result;
     result.x = box.cx;
@@ -47,7 +47,7 @@ template<typename T> FN_QUAL XYWH<T> convert_box_grad(const CXCYWH<T> box, xywh_
     return result;
 }
 
-template<typename T> FN_QUAL XYXY<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xyxy_tag)
+template<typename T> TFBO_HOST_DEVICE XYXY<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xyxy_tag)
 {
     XYXY<T> result;
     result.x1 = box.cx - box.w * 0.5f;
@@ -57,7 +57,7 @@ template<typename T> FN_QUAL XYXY<T> convert_box(const CXCYWH<T> box, cxcywh_tag
     return result;
 }
 
-template<typename T> FN_QUAL CXCYWH<T> convert_box_grad(const XYXY<T> box, cxcywh_tag, xyxy_tag)
+template<typename T> TFBO_HOST_DEVICE CXCYWH<T> convert_box_grad(const XYXY<T> box, cxcywh_tag, xyxy_tag)
 {
     CXCYWH<T> result;
     result.cx = box.x1 + box.x2;
@@ -67,7 +67,7 @@ template<typename T> FN_QUAL CXCYWH<T> convert_box_grad(const XYXY<T> box, cxcyw
     return result;
 }
 
-template<typename T> FN_QUAL XYXY<T> convert_box(const XYWH<T> box, xywh_tag, xyxy_tag)
+template<typename T> TFBO_HOST_DEVICE XYXY<T> convert_box(const XYWH<T> box, xywh_tag, xyxy_tag)
 {
     XYXY<T> result;
     result.x1 = box.x;
@@ -77,7 +77,7 @@ template<typename T> FN_QUAL XYXY<T> convert_box(const XYWH<T> box, xywh_tag, xy
     return result;
 }
 
-template<typename T> FN_QUAL XYWH<T> convert_box_grad(const XYXY<T> box, xywh_tag, xyxy_tag)
+template<typename T> TFBO_HOST_DEVICE XYWH<T> convert_box_grad(const XYXY<T> box, xywh_tag, xyxy_tag)
 {
     XYWH<T> result;
     result.x = box.x1 + box.x2;
@@ -87,7 +87,7 @@ template<typename T> FN_QUAL XYWH<T> convert_box_grad(const XYXY<T> box, xywh_ta
     return result;
 }
 
-template<typename T> FN_QUAL XYWH<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xywh_tag)
+template<typename T> TFBO_HOST_DEVICE XYWH<T> convert_box(const CXCYWH<T> box, cxcywh_tag, xywh_tag)
 {
     XYWH<T> result;
     result.x = box.cx - box.w * 0.5f;
@@ -97,7 +97,7 @@ template<typename T> FN_QUAL XYWH<T> convert_box(const CXCYWH<T> box, cxcywh_tag
     return result;
 }
 
-template<typename T> FN_QUAL CXCYWH<T> convert_box_grad(const XYWH<T> box, cxcywh_tag, xywh_tag)
+template<typename T> TFBO_HOST_DEVICE CXCYWH<T> convert_box_grad(const XYWH<T> box, cxcywh_tag, xywh_tag)
 {
     CXCYWH<T> result;
     result.cx = box.x;
@@ -107,7 +107,7 @@ template<typename T> FN_QUAL CXCYWH<T> convert_box_grad(const XYWH<T> box, cxcyw
     return result;
 }
 
-template<typename T> FN_QUAL XYWH<T> convert_box(const XYXY<T> box, xyxy_tag, xywh_tag)
+template<typename T> TFBO_HOST_DEVICE XYWH<T> convert_box(const XYXY<T> box, xyxy_tag, xywh_tag)
 {
     XYWH<T> result;
     result.x = box.x1;
@@ -117,7 +117,7 @@ template<typename T> FN_QUAL XYWH<T> convert_box(const XYXY<T> box, xyxy_tag, xy
     return result;
 }
 
-template<typename T> FN_QUAL XYXY<T> convert_box_grad(const XYWH<T> box, xyxy_tag, xywh_tag)
+template<typename T> TFBO_HOST_DEVICE XYXY<T> convert_box_grad(const XYWH<T> box, xyxy_tag, xywh_tag)
 {
     XYXY<T> result;
     result.x1 = box.x - box.w;
@@ -127,7 +127,7 @@ template<typename T> FN_QUAL XYXY<T> convert_box_grad(const XYWH<T> box, xyxy_ta
     return result;
 }
 
-#undef FN_QUAL
+#undef TFBO_HOST_DEVICE
 
 
 template<typename T> using BoxConverter = std::function<void(const void *, void *, size_t, bool, cudaStream_t)>;

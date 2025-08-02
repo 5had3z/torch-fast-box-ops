@@ -7,7 +7,10 @@
 #include "kernel.cuh"
 
 
-template<typename T> FN_QUAL auto box_area_op(const XYXY<T> &box) -> T { return (box.x2 - box.x1) * (box.y2 - box.y1); }
+template<typename T> TFBO_HOST_DEVICE auto box_area_op(const XYXY<T> &box) -> T
+{
+    return (box.x2 - box.x1) * (box.y2 - box.y1);
+}
 
 auto box_area(const torch::Tensor &boxes) -> torch::Tensor
 {
@@ -36,7 +39,7 @@ auto box_area(const torch::Tensor &boxes) -> torch::Tensor
     return output;
 }
 
-template<typename T> auto FN_QUAL box_area_grad(XYXY<T> box) -> XYXY<T>
+template<typename T> auto TFBO_HOST_DEVICE box_area_grad(XYXY<T> box) -> XYXY<T>
 {
     XYXY<T> grad_box;
     grad_box.x1 = box.y1 - box.y2;
@@ -46,7 +49,7 @@ template<typename T> auto FN_QUAL box_area_grad(XYXY<T> box) -> XYXY<T>
     return grad_box;
 }
 
-template<typename T> auto FN_QUAL box_area_backward_(T grad, XYXY<T> box) -> XYXY<T>
+template<typename T> auto TFBO_HOST_DEVICE box_area_backward_(T grad, XYXY<T> box) -> XYXY<T>
 {
     XYXY<T> grad_box = box_area_grad(box);
     grad_box.x1 = grad * grad_box.x1;
@@ -81,7 +84,7 @@ auto box_area_backward(const torch::Tensor &grad, const torch::Tensor &boxes) ->
     return input_grad;
 }
 
-template<typename T> FN_QUAL auto box_intersection(const XYXY<T> &box1, const XYXY<T> &box2) -> XYXY<T>
+template<typename T> TFBO_HOST_DEVICE auto box_intersection(const XYXY<T> &box1, const XYXY<T> &box2) -> XYXY<T>
 {
     XYXY<T> inter_box;
     inter_box.x1 = std::max(box1.x1, box2.x1);
@@ -92,7 +95,7 @@ template<typename T> FN_QUAL auto box_intersection(const XYXY<T> &box1, const XY
 }
 
 
-template<typename T> FN_QUAL auto box_intersection_area(const XYXY<T> &box1, const XYXY<T> &box2) -> T
+template<typename T> TFBO_HOST_DEVICE auto box_intersection_area(const XYXY<T> &box1, const XYXY<T> &box2) -> T
 {
     auto inter_box = box_intersection(box1, box2);
     T inter_area = std::max(inter_box.x2 - inter_box.x1, static_cast<T>(0))
@@ -133,8 +136,8 @@ void box_iou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
 }
 
 
-constexpr int box_iou_block_size_x = 32;
-constexpr int box_iou_block_size_y = 16;
+constexpr uint box_iou_block_size_x = 32;
+constexpr uint box_iou_block_size_y = 16;
 
 template<typename T, typename U = std::conditional_t<std::is_integral_v<T>, float, T>>
 __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
@@ -144,22 +147,27 @@ __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
     unsigned int M)
 {
     __shared__ XYXY<T> shared_boxes1[box_iou_block_size_y];
+    __shared__ U shared_boxes1_area[box_iou_block_size_y];
     __shared__ XYXY<T> shared_boxes2[box_iou_block_size_x];
+    __shared__ U shared_boxes2_area[box_iou_block_size_x];
 
     unsigned int b = blockIdx.z;
     unsigned int n = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned int m = blockIdx.x * blockDim.x + threadIdx.x;
     if (n >= N || m >= M) return;// Prevent out-of-bounds access
-    if (threadIdx.y == 0) { shared_boxes2[threadIdx.x] = boxes2[b * M + m]; }
+    if (threadIdx.y == 0) {
+        shared_boxes2[threadIdx.x] = boxes2[b * M + m];
+        shared_boxes2_area[threadIdx.x] = box_area_op(shared_boxes2[threadIdx.x]);
+    }
     if (threadIdx.y == 1 && threadIdx.x < blockDim.y) {
         shared_boxes1[threadIdx.x] = boxes1[b * N + blockIdx.y * blockDim.y + threadIdx.x];
+        shared_boxes1_area[threadIdx.x] = box_area_op(shared_boxes1[threadIdx.x]);
     }
     __syncthreads();
     const auto box2 = shared_boxes2[threadIdx.x];
     const auto box1 = shared_boxes1[threadIdx.y];
-    const auto area1 = box_area_op(box1);
-    const auto intersection = static_cast<U>(box_intersection_area(box1, box2));
-    const auto union_area = static_cast<U>(area1 + box_area_op(box2) - intersection);
+    const U intersection = box_intersection_area(box1, box2);
+    const auto union_area = shared_boxes1_area[threadIdx.y] + shared_boxes2_area[threadIdx.x] - intersection;
     output[b * N * M + n * M + m] = intersection / union_area;
 }
 
@@ -271,7 +279,7 @@ auto loss_inter_union(const torch::Tensor &boxes1, const torch::Tensor &boxes2)
 }
 
 template<typename T>
-FN_QUAL auto intersection_grad(const XYXY<T> &box1, const XYXY<T> &box2, const XYXY<T> &inter_box)
+TFBO_HOST_DEVICE auto intersection_grad(const XYXY<T> &box1, const XYXY<T> &box2, const XYXY<T> &inter_box)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
     XYXY<T> grad_box1, grad_box2;
@@ -308,7 +316,7 @@ FN_QUAL auto intersection_grad(const XYXY<T> &box1, const XYXY<T> &box2, const X
 
 
 template<typename T>
-FN_QUAL auto inter_union_grad(T grad_inter, T grad_union, const XYXY<T> &box1, const XYXY<T> &box2)
+TFBO_HOST_DEVICE auto inter_union_grad(T grad_inter, T grad_union, const XYXY<T> &box1, const XYXY<T> &box2)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
     XYXY<T> inter_box = box_intersection(box1, box2);

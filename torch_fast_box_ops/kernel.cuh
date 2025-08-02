@@ -4,9 +4,9 @@
 #include <cuda_occupancy.h>
 
 #ifdef __CUDACC__
-#define FN_QUAL __host__ __device__
+#define TFBO_HOST_DEVICE __host__ __device__
 #else
-#define FN_QUAL
+#define TFBO_HOST_DEVICE
 #endif
 
 /**
