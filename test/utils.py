@@ -31,3 +31,15 @@ def make_random_boxes(
         boxes = boxes.squeeze(0)
 
     return boxes
+
+
+def make_random_box_pairs(
+    *args, seed_0: int = 0, seed_1: int = 1, **kwargs
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generate pairs of random bounding boxes for testing.
+    This is a convenience function that calls `make_random_boxes` twice.
+    """
+    boxes1 = make_random_boxes(*args, **kwargs, seed=seed_0)
+    boxes2 = make_random_boxes(*args, **kwargs, seed=seed_1)
+    return boxes1, boxes2

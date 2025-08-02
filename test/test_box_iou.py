@@ -6,15 +6,19 @@ from torchvision.ops.boxes import (
     box_iou as tv_box_iou,
     generalized_box_iou as tv_generalized_box_iou,
 )
+from torchvision.ops.giou_loss import (
+    generalized_box_iou_loss as tv_generalized_box_iou_loss,
+)
 from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
 from torch_fast_box_ops import (
     box_area as tfbo_box_area,
     box_iou as tfbo_box_iou,
     _loss_inter_union as tfbo_loss_inter_union,
     generalized_box_iou as tfbo_generalized_box_iou,
+    generalized_box_iou_loss as tfbo_generalized_box_iou_loss,
 )
 
-from utils import make_random_boxes
+from utils import make_random_boxes, make_random_box_pairs
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -120,10 +124,7 @@ def test_box_giou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tu
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_loss_inter_union(device: str):
-    boxes1 = make_random_boxes(
-        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
-    )
-    boxes2 = make_random_boxes(
+    boxes1, boxes2 = make_random_box_pairs(
         "xyxy", 10, dtype=torch.float32, device=device, normalized=True
     )
 
@@ -137,11 +138,8 @@ def test_loss_inter_union(device: str):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.float16])
 def test_loss_inter_union_backward(device: str, dtype: torch.dtype):
-    boxes1_tfbo = make_random_boxes(
-        "xyxy", 10, dtype=dtype, device=device, normalized=True, seed=0
-    )
-    boxes2_tfbo = make_random_boxes(
-        "xyxy", 10, dtype=dtype, device=device, normalized=True, seed=1
+    boxes1_tfbo, boxes2_tfbo = make_random_box_pairs(
+        "xyxy", 10, dtype=dtype, device=device, normalized=True
     )
 
     boxes1_tv = boxes1_tfbo.clone()
@@ -168,14 +166,11 @@ def test_loss_inter_union_backward(device: str, dtype: torch.dtype):
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_loss_giou(device: str):
-    boxes1 = make_random_boxes(
-        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
-    )
-    boxes2 = make_random_boxes(
+    boxes1, boxes2 = make_random_box_pairs(
         "xyxy", 10, dtype=torch.float32, device=device, normalized=True
     )
 
-    tv_giou = tv_generalized_box_iou(boxes1, boxes2)
-    tfbo_giou = tfbo_generalized_box_iou(boxes1, boxes2)
+    tv_giou = tv_generalized_box_iou_loss(boxes1, boxes2)
+    tfbo_giou = tfbo_generalized_box_iou_loss(boxes1, boxes2)
 
     torch.testing.assert_close(tfbo_giou, tv_giou)
