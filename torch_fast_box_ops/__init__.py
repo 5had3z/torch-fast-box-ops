@@ -5,13 +5,8 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
-# Grab binding from goofy-ahh folder above after installation
 torch.ops.load_library(
-    next(
-        str(p)
-        for p in Path(__file__).parent.parent.iterdir()
-        if p.suffix == ".so" and p.stem.startswith("torch_fast_box_ops")
-    )
+    next(str(p) for p in Path(__file__).parent.iterdir() if p.suffix == ".so")
 )
 
 

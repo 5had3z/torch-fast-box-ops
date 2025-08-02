@@ -2,7 +2,7 @@
 """Compile the C++ and CUDA extensions for torch_fast_box_ops."""
 from pathlib import Path
 
-from setuptools import setup
+from setuptools import setup, find_packages
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 if __name__ == "__main__":
@@ -16,19 +16,14 @@ if __name__ == "__main__":
         )
     )
     setup(
-        py_modules=["torch_fast_box_ops"],
+        packages=find_packages(),
         ext_modules=[
             CUDAExtension(
-                "torch_fast_box_ops",
+                "torch_fast_box_ops._C",
                 targets,
                 extra_compile_args={
-                    "cxx": ["-O3", "-std=c++17"],
-                    "nvcc": [
-                        "-O3",
-                        "-std=c++17",
-                        "--extended-lambda",
-                        "--use_fast_math",
-                    ],
+                    "cxx": ["-O3"],
+                    "nvcc": ["-O3", "--extended-lambda", "--use_fast_math"],
                 },
             )
         ],
