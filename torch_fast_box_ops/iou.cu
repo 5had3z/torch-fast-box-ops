@@ -338,22 +338,26 @@ TFBO_HOST_DEVICE auto intersection_grad(const XYXY<T> &box1, const XYXY<T> &box2
 
     bool x1_gt = box1.x1 > box2.x1;
     bool x1_eq = box1.x1 == box2.x1;
+    bool x1_lt = box1.x1 < box2.x1;
     grad_box1.x1 = -(x1_gt + subgrad * x1_eq) * inter_height;
-    grad_box2.x1 = -(!x1_gt + subgrad * x1_eq) * inter_height;
+    grad_box2.x1 = -(x1_lt + subgrad * x1_eq) * inter_height;
 
     bool y1_gt = box1.y1 > box2.y1;
     bool y1_eq = box1.y1 == box2.y1;
+    bool y1_lt = box1.y1 < box2.y1;
     grad_box1.y1 = -(y1_gt + subgrad * y1_eq) * inter_width;
-    grad_box2.y1 = -(!y1_gt + subgrad * y1_eq) * inter_width;
+    grad_box2.y1 = -(y1_lt + subgrad * y1_eq) * inter_width;
 
     bool x2_gt = box1.x2 > box2.x2;
     bool x2_eq = box1.x2 == box2.x2;
-    grad_box1.x2 = (!x2_gt + subgrad * x2_eq) * inter_height;
+    bool x2_lt = box1.x2 < box2.x2;
+    grad_box1.x2 = (x2_lt + subgrad * x2_eq) * inter_height;
     grad_box2.x2 = (x2_gt + subgrad * x2_eq) * inter_height;
 
     bool y2_gt = box1.y2 > box2.y2;
     bool y2_eq = box1.y2 == box2.y2;
-    grad_box1.y2 = (!y2_gt + subgrad * y2_eq) * inter_width;
+    bool y2_lt = box1.y2 < box2.y2;
+    grad_box1.y2 = (y2_lt + subgrad * y2_eq) * inter_width;
     grad_box2.y2 = (y2_gt + subgrad * y2_eq) * inter_width;
 
     return { grad_box1, grad_box2 };
@@ -482,49 +486,52 @@ TFBO_HOST_DEVICE auto min_enclosing_box_grad(const XYXY<T> &box1, const XYXY<T> 
     XYXY<T> box1_grad, box2_grad;
     T enc_w = enc_box.x2 - enc_box.x1;
     T enc_h = enc_box.y2 - enc_box.y1;
+    const T subgrad = static_cast<T>(0.5);
 
     bool x1_lt = box1.x1 < box2.x1;
     bool x1_eq = box1.x1 == box2.x1;
-    box1_grad.x1 = -(x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
-    box2_grad.x1 = -(!x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
+    bool x1_gt = box1.x1 > box2.x1;
+    box1_grad.x1 = -(x1_lt + subgrad * x1_eq) * enc_h;
+    box2_grad.x1 = -(x1_gt + subgrad * x1_eq) * enc_h;
 
     bool y1_lt = box1.y1 < box2.y1;
     bool y1_eq = box1.y1 == box2.y1;
-    box1_grad.y1 = -(y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
-    box2_grad.y1 = -(!y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
+    bool y1_gt = box1.y1 > box2.y1;
+    box1_grad.y1 = -(y1_lt + subgrad * y1_eq) * enc_w;
+    box2_grad.y1 = -(y1_gt + subgrad * y1_eq) * enc_w;
 
     bool x2_lt = box1.x2 < box2.x2;
     bool x2_eq = box1.x2 == box2.x2;
-    box1_grad.x2 = (!x2_lt + static_cast<T>(0.5) * x2_eq) * enc_h;
-    box2_grad.x2 = (x2_lt + static_cast<T>(0.5) * x2_eq) * enc_h;
+    bool x2_gt = box1.x2 > box2.x2;
+    box1_grad.x2 = (x2_gt + subgrad * x2_eq) * enc_h;
+    box2_grad.x2 = (x2_lt + subgrad * x2_eq) * enc_h;
 
     bool y2_lt = box1.y2 < box2.y2;
     bool y2_eq = box1.y2 == box2.y2;
-    box1_grad.y2 = (!y2_lt + static_cast<T>(0.5) * y2_eq) * enc_w;
-    box2_grad.y2 = (y2_lt + static_cast<T>(0.5) * y2_eq) * enc_w;
+    bool y2_gt = box1.y2 > box2.y2;
+    box1_grad.y2 = (y2_gt + subgrad * y2_eq) * enc_w;
+    box2_grad.y2 = (y2_lt + subgrad * y2_eq) * enc_w;
 
     return { box1_grad, box2_grad };
 }
 
 template<typename T>
-TFBO_HOST_DEVICE auto giou_grad(T grad, const XYXY<T> &box1, const XYXY<T> &box2, T eps) -> std::tuple<XYXY<T>, XYXY<T>>
+TFBO_HOST_DEVICE auto giou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps)
+    -> std::tuple<XYXY<T>, XYXY<T>>
 {
-    grad = -grad;// 1 - giou loss is used, so we negate the gradient
-    XYXY<T> inter_box = box_intersection(box1, box2);
-    T inter_area = std::max(box_area_op(inter_box), static_cast<T>(0));
-    T union_area = box_area_op(box1) + box_area_op(box2) - inter_area + eps;
+    T inter_area = box_intersection_area(box1, box2);
+    T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
     XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
     T enc_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
 
     T enc_area_eps = enc_area + eps;
-    T grad_enc_area = -grad * union_area / (enc_area_eps * enc_area_eps);
-    auto [grad_box1_enc, grad_box2_enc] = min_enclosing_box_grad(box1, box2, enclosing_box);
-
     T union_area_eps = union_area + eps;
-    T grad_inter = grad / union_area_eps;
-    T grad_union = grad * (1 - inter_area / (union_area_eps * union_area_eps));
-    printf("grad_inter: %f, grad_union: %f, grad_enc_area: %f\n", grad_inter, grad_union, grad_enc_area);
 
+    T grad_enc_area = grad_loss * union_area / (enc_area_eps * enc_area_eps);
+    T grad_inter = -grad_loss / union_area_eps;
+    T grad_union = grad_loss * (inter_area / (union_area_eps * union_area_eps) - 1 / enc_area_eps);
+
+    auto [grad_box1_enc, grad_box2_enc] = min_enclosing_box_grad(box1, box2, enclosing_box);
     auto [grad_box1, grad_box2] = inter_union_grad(grad_inter, grad_union, box1, box2);
 
     // Combine gradients with FMA

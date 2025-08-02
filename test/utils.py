@@ -21,6 +21,8 @@ def make_random_boxes(
             rand_xy *= 100
             rand_wh *= 50
         boxes = torch.cat([rand_xy, rand_xy + rand_wh], dim=-1)
+        if normalized:
+            boxes = boxes.clamp(0, 1)
     else:
         boxes = torch.rand(num_batch, num_boxes, 4)
         if not normalized:

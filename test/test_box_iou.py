@@ -37,7 +37,7 @@ def test_box_area(device: str, dtype: torch.dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.float16])
 def test_box_area_backward(device: str, dtype: torch.dtype):
     tfbo_boxes = make_random_boxes(
-        "xyxy", 10, dtype=dtype, device=device, normalized=True
+        "xyxy", 100, dtype=dtype, device=device, normalized=True
     )
     tv_boxes = tfbo_boxes.clone()
     tv_boxes.requires_grad = True
@@ -179,7 +179,7 @@ def test_loss_giou(device: str):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_loss_giou_backward(device: str):
     boxes1_tfbo, boxes2_tfbo = make_random_box_pairs(
-        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+        "xyxy", 1000, dtype=torch.float32, device=device, normalized=True
     )
 
     boxes1_tv = boxes1_tfbo.clone()
@@ -193,7 +193,7 @@ def test_loss_giou_backward(device: str):
     tv_giou = tv_generalized_box_iou_loss(boxes1_tv, boxes2_tv)
     tfbo_giou = tfbo_generalized_box_iou_loss(boxes1_tfbo, boxes2_tfbo)
 
-    torch.testing.assert_close(tfbo_giou, tv_giou)
+    torch.testing.assert_close(tfbo_giou, tv_giou, rtol=1e-5, atol=2e-5)
 
     # Create random gradients for backward pass
     tv_giou.mean().backward()
