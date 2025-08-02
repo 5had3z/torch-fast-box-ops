@@ -134,3 +134,57 @@ def generalized_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
         Tensor: GIoU values for each pair of boxes.
     """
     return torch.ops.box_ops.generalized_box_iou(boxes1, boxes2)
+
+
+def _generalized_box_iou_loss_context(
+    ctx, inputs: tuple[Tensor, Tensor], output: Tensor
+):
+    """Save the boxes tensors for backward pass."""
+    ctx.save_for_backward(inputs[0], inputs[1])
+
+
+def _generalized_box_iou_loss_backward(ctx, grad: Tensor):
+    (boxes1, boxes2) = ctx.saved_tensors
+    grad_boxes1, grad_boxes2 = torch.ops.box_ops.generalized_box_iou_loss_backward(
+        grad, boxes1, boxes2
+    )
+    return grad_boxes1, grad_boxes2
+
+
+torch.library.register_autograd(
+    "box_ops::generalized_box_iou_loss",
+    _generalized_box_iou_loss_backward,
+    setup_context=_generalized_box_iou_loss_context,
+)
+
+
+def generalized_box_iou_loss(
+    boxes1: Tensor, boxes2: Tensor, reduction: str = "none", eps: float = 1e-7
+) -> Tensor:
+    """
+    Compute the Generalized IoU loss for two sets of bounding boxes.
+
+    Args:
+        boxes1 (Tensor): First set of boxes in format [x1, y1, x2, y2].
+        boxes2 (Tensor): Second set of boxes in format [x1, y1, x2, y2].
+        reduction (str): Reduction method ('none', 'mean', 'sum').
+        eps (float): Small value to prevent division by zero.
+
+    Returns:
+        Tensor: Loss values with the specified reduction applied.
+    """
+    loss: Tensor = torch.ops.box_ops.generalized_box_iou_loss(boxes1, boxes2, eps)
+
+    # Check reduction option and return loss accordingly
+    if reduction == "none":
+        pass
+    elif reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+    elif reduction == "sum":
+        loss = loss.sum()
+    else:
+        raise ValueError(
+            f"Invalid Value for arg 'reduction': '{reduction} \n "
+            "Supported reduction modes: 'none', 'mean', 'sum'"
+        )
+    return loss

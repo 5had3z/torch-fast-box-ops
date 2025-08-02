@@ -164,3 +164,18 @@ def test_loss_inter_union_backward(device: str, dtype: torch.dtype):
     # Check gradients
     torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad)
     torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_loss_giou(device: str):
+    boxes1 = make_random_boxes(
+        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+    )
+    boxes2 = make_random_boxes(
+        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+    )
+
+    tv_giou = tv_generalized_box_iou(boxes1, boxes2)
+    tfbo_giou = tfbo_generalized_box_iou(boxes1, boxes2)
+
+    torch.testing.assert_close(tfbo_giou, tv_giou)

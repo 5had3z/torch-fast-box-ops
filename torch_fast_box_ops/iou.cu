@@ -436,22 +436,61 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
 }
 
 
+auto generalized_box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor
+{
+    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
+    TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
+    TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
+
+    auto giou_loss = boxes1.new_empty({ boxes1.size(0) });
+
+    TFBO_DISPATCH_BOX_TYPES(boxes1.scalar_type(), "generalized_box_iou_loss", [&] {
+        const auto num_boxes = boxes1.size(0);
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        auto giou_loss_ptr = giou_loss.mutable_data_ptr<scalar_t>();
+
+        if (boxes1.is_cuda()) {
+            auto kernel = [=] __device__(unsigned int idx) {
+                auto intersection = box_intersection_area(boxes1_ptr[idx], boxes2_ptr[idx]);
+                auto union_area = box_area_op(boxes1_ptr[idx]) + box_area_op(boxes2_ptr[idx]) - intersection;
+                XYXY<scalar_t> enclosing_box = min_enclosing_box(boxes1_ptr[idx], boxes2_ptr[idx]);
+                scalar_t enclosing_area = std::max(box_area_op(enclosing_box), static_cast<scalar_t>(0));
+                giou_loss_ptr[idx] = intersection / union_area - (enclosing_area - union_area) / (enclosing_area + eps);
+            };
+            launch_elementwise_kernel(kernel, num_boxes, at::cuda::getCurrentCUDAStream());
+        } else {
+            for (std::size_t i = 0; i < num_boxes; ++i) {
+                auto intersection = box_intersection_area(boxes1_ptr[i], boxes2_ptr[i]);
+                auto union_area = box_area_op(boxes1_ptr[i]) + box_area_op(boxes2_ptr[i]) - intersection;
+                XYXY<scalar_t> enclosing_box = min_enclosing_box(boxes1_ptr[i], boxes2_ptr[i]);
+                scalar_t enclosing_area = std::max(box_area_op(enclosing_box), static_cast<scalar_t>(0));
+                giou_loss_ptr[i] = intersection / union_area - (enclosing_area - union_area) / (enclosing_area + eps);
+            }
+        }
+    });
+
+    return giou_loss;
+}
+
 TORCH_LIBRARY_IMPL(box_ops, CPU, m)
 {
-    m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("box_area", &box_area);
+    m.impl("box_iou", &box_iou<iou_tag>);
+    m.impl("generalized_box_iou", &box_iou<giou_tag>);
     m.impl("box_area_backward", &box_area_backward);
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
-    m.impl("generalized_box_iou", &box_iou<giou_tag>);
+    m.impl("generalized_box_iou_loss", &generalized_box_iou_loss);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
 {
-    m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("box_area", &box_area);
+    m.impl("box_iou", &box_iou<iou_tag>);
+    m.impl("generalized_box_iou", &box_iou<giou_tag>);
     m.impl("box_area_backward", &box_area_backward);
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
-    m.impl("generalized_box_iou", &box_iou<giou_tag>);
+    m.impl("generalized_box_iou_loss", &generalized_box_iou_loss);
 }
