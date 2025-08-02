@@ -103,6 +103,41 @@ template<typename T> TFBO_HOST_DEVICE auto box_intersection_area(const XYXY<T> &
     return inter_area;
 }
 
+/**
+ * @brief Compute the minimum enclosing box of two boxes.
+ *
+ * @tparam T
+ * @param box1
+ * @param box2
+ * @return XYXY<T> minumum enclosing box that contains both box1 and box2.
+ */
+template<typename T> TFBO_HOST_DEVICE auto min_enclosing_box(const XYXY<T> &box1, const XYXY<T> &box2) -> XYXY<T>
+{
+    XYXY<T> enclosing_box;
+    enclosing_box.x1 = std::min(box1.x1, box2.x1);
+    enclosing_box.y1 = std::min(box1.y1, box2.y1);
+    enclosing_box.x2 = std::max(box1.x2, box2.x2);
+    enclosing_box.y2 = std::max(box1.y2, box2.y2);
+    return enclosing_box;
+}
+
+struct iou_type_tag
+{
+};
+struct iou_tag : iou_type_tag
+{
+};
+struct giou_tag : iou_type_tag
+{
+};
+struct diou_tag : iou_type_tag
+{
+};
+struct ciou_tag : iou_type_tag
+{
+};
+
+template<typename IouType>
 void box_iou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output)
 {
     TFBO_DISPATCH_BOX_TYPES(boxes1.scalar_type(), "box_iou", [&] {
@@ -111,23 +146,26 @@ void box_iou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
         const auto M = boxes2.size(1);
         const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
         const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
-        auto output_ptr =
-            static_cast<std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t> *>(output.mutable_data_ptr());
+
+        using output_t = std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t>;
+        auto output_ptr = static_cast<output_t *>(output.mutable_data_ptr());
 
         std::vector<scalar_t> areas2(M);
 
         for (int b = 0; b < B; ++b) {
             std::transform(boxes2_ptr + b * M, boxes2_ptr + (b + 1) * M, areas2.begin(), box_area_op<scalar_t>);
             for (int n = 0; n < N; ++n) {
-                const auto area1 = box_area_op(boxes1_ptr[b * N + n]);
+                const scalar_t area1 = box_area_op(boxes1_ptr[b * N + n]);
                 for (int m = 0; m < M; ++m) {
-                    const auto intersection = box_intersection_area(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
-                    const auto union_area = area1 + areas2[m] - intersection;
-                    if (std::is_integral_v<scalar_t>) {
-                        output_ptr[b * N * M + n * M + m] =
-                            static_cast<float>(intersection) / static_cast<float>(union_area);
-                    } else {
+                    const scalar_t intersection = box_intersection_area(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
+                    const output_t union_area = area1 + areas2[m] - intersection;
+                    if constexpr (std::is_same_v<IouType, iou_tag>) {
                         output_ptr[b * N * M + n * M + m] = intersection / union_area;
+                    } else if constexpr (std::is_same_v<IouType, giou_tag>) {
+                        XYXY<scalar_t> enclosing_box = min_enclosing_box(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
+                        output_t enclosing_area = std::max(box_area_op(enclosing_box), static_cast<scalar_t>(0));
+                        output_ptr[b * N * M + n * M + m] =
+                            intersection / union_area - (enclosing_area - union_area) / enclosing_area;
                     }
                 }
             }
@@ -139,7 +177,7 @@ void box_iou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
 constexpr uint box_iou_block_size_x = 32;
 constexpr uint box_iou_block_size_y = 16;
 
-template<typename T, typename U = std::conditional_t<std::is_integral_v<T>, float, T>>
+template<typename T, typename IouType, typename U = std::conditional_t<std::is_integral_v<T>, float, T>>
 __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
     const XYXY<T> *__restrict__ boxes2,
     U *output,
@@ -147,9 +185,9 @@ __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
     unsigned int M)
 {
     __shared__ XYXY<T> shared_boxes1[box_iou_block_size_y];
-    __shared__ U shared_boxes1_area[box_iou_block_size_y];
+    __shared__ T shared_boxes1_area[box_iou_block_size_y];
     __shared__ XYXY<T> shared_boxes2[box_iou_block_size_x];
-    __shared__ U shared_boxes2_area[box_iou_block_size_x];
+    __shared__ T shared_boxes2_area[box_iou_block_size_x];
 
     unsigned int b = blockIdx.z;
     unsigned int n = blockIdx.y * blockDim.y + threadIdx.y;
@@ -166,11 +204,18 @@ __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
     __syncthreads();
     const auto box2 = shared_boxes2[threadIdx.x];
     const auto box1 = shared_boxes1[threadIdx.y];
-    const U intersection = box_intersection_area(box1, box2);
-    const auto union_area = shared_boxes1_area[threadIdx.y] + shared_boxes2_area[threadIdx.x] - intersection;
-    output[b * N * M + n * M + m] = intersection / union_area;
+    const T intersection = box_intersection_area(box1, box2);
+    const U union_area = shared_boxes1_area[threadIdx.y] + shared_boxes2_area[threadIdx.x] - intersection;
+    if constexpr (std::is_same_v<IouType, iou_tag>) {
+        output[b * N * M + n * M + m] = intersection / union_area;
+    } else if constexpr (std::is_same_v<IouType, giou_tag>) {
+        XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
+        U enclosing_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
+        output[b * N * M + n * M + m] = intersection / union_area - (enclosing_area - union_area) / enclosing_area;
+    }
 }
 
+template<typename IouType>
 void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output)
 {
     auto stream = at::cuda::getCurrentCUDAStream();
@@ -185,7 +230,7 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
 
         auto block_dim = dim3(box_iou_block_size_x, box_iou_block_size_y);
         auto grid_dim = dim3(cuda::ceil_div(M, block_dim.x), cuda::ceil_div(N, block_dim.y), B);
-        box_iou_kernel<<<grid_dim, block_dim, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
+        box_iou_kernel<scalar_t, IouType><<<grid_dim, block_dim, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
     });
 }
 
@@ -220,7 +265,7 @@ auto create_iou_output_tensor(const torch::Tensor &boxes1, const torch::Tensor &
     return torch::empty(output_shape, opts);
 }
 
-auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
+template<typename IouType> auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
 {
     TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
     TORCH_CHECK(boxes1.size(-1) == 4 && boxes2.size(-1) == 4, "Input tensors must have shape (..., 4) for boxes");
@@ -235,9 +280,9 @@ auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch:
     std::tie(boxes1_flat, boxes2_flat, output_flat) = regularize_for_iou(boxes1, boxes2, output);
 
     if (boxes1_flat.is_cuda()) {
-        box_iou_gpu_impl(boxes1_flat, boxes2_flat, output_flat);
+        box_iou_gpu_impl<IouType>(boxes1_flat, boxes2_flat, output_flat);
     } else {
-        box_iou_cpu_impl(boxes1_flat, boxes2_flat, output_flat);
+        box_iou_cpu_impl<IouType>(boxes1_flat, boxes2_flat, output_flat);
     }
 
     return output;
@@ -390,97 +435,23 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
     return { grad_boxes1, grad_boxes2 };
 }
 
-/**
- * @brief Compute the minimum enclosing box of two boxes.
- *
- * @tparam T
- * @param box1
- * @param box2
- * @return XYXY<T> minumum enclosing box that contains both box1 and box2.
- */
-template<typename T> auto min_enclosing_box(const XYXY<T> &box1, const XYXY<T> &box2) -> XYXY<T>
-{
-    XYXY<T> enclosing_box;
-    enclosing_box.x1 = std::min(box1.x1, box2.x1);
-    enclosing_box.y1 = std::min(box1.y1, box2.y1);
-    enclosing_box.x2 = std::max(box1.x2, box2.x2);
-    enclosing_box.y2 = std::max(box1.y2, box2.y2);
-    return enclosing_box;
-}
-
-void giou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output)
-{
-    TFBO_DISPATCH_BOX_TYPES(boxes1.scalar_type(), "generalized_box_iou", [&] {
-        const auto B = boxes1.size(0);
-        const auto N = boxes1.size(1);
-        const auto M = boxes2.size(1);
-        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
-        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
-        auto output_ptr =
-            static_cast<std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t> *>(output.mutable_data_ptr());
-
-        for (int b = 0; b < B; ++b) {
-            for (int n = 0; n < N; ++n) {
-                const auto area1 = box_area_op(boxes1_ptr[b * N + n]);
-                for (int m = 0; m < M; ++m) {
-                    const auto area2 = box_area_op(boxes2_ptr[b * M + m]);
-                    const auto intersection = box_intersection_area(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
-                    const auto union_area = area1 + area2 - intersection;
-                    auto enclosing_box = min_enclosing_box(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
-                    auto enclosing_area = std::max(box_area_op(enclosing_box), static_cast<scalar_t>(0));
-
-                    if (std::is_integral_v<scalar_t>) {
-                        auto iou = static_cast<float>(intersection) / static_cast<float>(union_area);
-                        output_ptr[b * N * M + n * M + m] =
-                            iou - static_cast<float>(enclosing_area - union_area) / static_cast<float>(enclosing_area);
-                    } else {
-                        auto iou = intersection / union_area;
-                        output_ptr[b * N * M + n * M + m] = iou - (enclosing_area - union_area) / enclosing_area;
-                    }
-                }
-            }
-        }
-    });
-}
-
-auto generalized_box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
-{
-    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
-    TORCH_CHECK(boxes1.size(-1) == 4 && boxes2.size(-1) == 4, "Input tensors must have shape (..., 4) for boxes");
-    TORCH_CHECK(boxes1.ndimension() == boxes2.ndimension(),
-        "Input tensors boxes1 and boxes2 must have the same number of dimensions");
-    TORCH_CHECK(boxes1.ndimension() >= 2, "Input tensors boxes1 and boxes2 must have at least 2 dimensions");
-
-    auto output = create_iou_output_tensor(boxes1, boxes2);
-
-    // Regularize the shape to Batch x Nboxes x 4
-    torch::Tensor boxes1_flat, boxes2_flat, output_flat;
-    std::tie(boxes1_flat, boxes2_flat, output_flat) = regularize_for_iou(boxes1, boxes2, output);
-
-    if (boxes1_flat.is_cuda()) {
-        // Not implemented
-    } else {
-        giou_cpu_impl(boxes1_flat, boxes2_flat, output_flat);
-    }
-
-    return output;
-}
 
 TORCH_LIBRARY_IMPL(box_ops, CPU, m)
 {
-    m.impl("box_iou", &box_iou);
+    m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("box_area", &box_area);
     m.impl("box_area_backward", &box_area_backward);
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
-    m.impl("generalized_box_iou", &generalized_box_iou);
+    m.impl("generalized_box_iou", &box_iou<giou_tag>);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
 {
-    m.impl("box_iou", &box_iou);
+    m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("box_area", &box_area);
     m.impl("box_area_backward", &box_area_backward);
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
+    m.impl("generalized_box_iou", &box_iou<giou_tag>);
 }

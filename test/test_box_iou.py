@@ -85,7 +85,7 @@ def test_box_iou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tup
         torch.testing.assert_close(tfbo_iou, tv_iou)
 
 
-@pytest.mark.parametrize("device", ["cpu"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("num_batch", [1, 4])
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
