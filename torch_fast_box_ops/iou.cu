@@ -476,7 +476,7 @@ auto generalized_box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &
 }
 
 template<typename T>
-TFBO_HOST_DEVICE auto min_enclosing_area_grad(const XYXY<T> &box1, const XYXY<T> &box2, const XYXY<T> &enc_box)
+TFBO_HOST_DEVICE auto min_enclosing_box_grad(const XYXY<T> &box1, const XYXY<T> &box2, const XYXY<T> &enc_box)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
     XYXY<T> box1_grad, box2_grad;
@@ -485,13 +485,13 @@ TFBO_HOST_DEVICE auto min_enclosing_area_grad(const XYXY<T> &box1, const XYXY<T>
 
     bool x1_lt = box1.x1 < box2.x1;
     bool x1_eq = box1.x1 == box2.x1;
-    box1_grad.x1 = (x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
-    box2_grad.x1 = (!x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
+    box1_grad.x1 = -(x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
+    box2_grad.x1 = -(!x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
 
     bool y1_lt = box1.y1 < box2.y1;
     bool y1_eq = box1.y1 == box2.y1;
-    box1_grad.y1 = (y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
-    box2_grad.y1 = (!y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
+    box1_grad.y1 = -(y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
+    box2_grad.y1 = -(!y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
 
     bool x2_lt = box1.x2 < box2.x2;
     bool x2_eq = box1.x2 == box2.x2;
@@ -509,7 +509,7 @@ TFBO_HOST_DEVICE auto min_enclosing_area_grad(const XYXY<T> &box1, const XYXY<T>
 template<typename T>
 TFBO_HOST_DEVICE auto giou_grad(T grad, const XYXY<T> &box1, const XYXY<T> &box2, T eps) -> std::tuple<XYXY<T>, XYXY<T>>
 {
-    grad = -grad;// 1-miouk
+    grad = -grad;// 1 - giou loss is used, so we negate the gradient
     XYXY<T> inter_box = box_intersection(box1, box2);
     T inter_area = std::max(box_area_op(inter_box), static_cast<T>(0));
     T union_area = box_area_op(box1) + box_area_op(box2) - inter_area + eps;
@@ -517,12 +517,13 @@ TFBO_HOST_DEVICE auto giou_grad(T grad, const XYXY<T> &box1, const XYXY<T> &box2
     T enc_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
 
     T enc_area_eps = enc_area + eps;
-    T grad_enc_area = -(union_area + 2 * enc_area + eps) / (enc_area_eps * enc_area_eps);
-    auto [grad_box1_enc, grad_box2_enc] = min_enclosing_area_grad(box1, box2, enclosing_box);
+    T grad_enc_area = -grad * union_area / (enc_area_eps * enc_area_eps);
+    auto [grad_box1_enc, grad_box2_enc] = min_enclosing_box_grad(box1, box2, enclosing_box);
 
     T union_area_eps = union_area + eps;
     T grad_inter = grad / union_area_eps;
     T grad_union = grad * (1 - inter_area / (union_area_eps * union_area_eps));
+    printf("grad_inter: %f, grad_union: %f, grad_enc_area: %f\n", grad_inter, grad_union, grad_enc_area);
 
     auto [grad_box1, grad_box2] = inter_union_grad(grad_inter, grad_union, box1, box2);
 
