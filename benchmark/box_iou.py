@@ -7,10 +7,14 @@ import pandas as pd
 import torch
 from torchvision.ops.boxes import box_area as tv_box_area, box_iou as tv_box_iou
 from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
+from torchvision.ops.giou_loss import (
+    generalized_box_iou_loss as tv_generalized_box_iou_loss,
+)
 from torch_fast_box_ops import (
     box_area as tfbo_box_area,
     box_iou as tfbo_box_iou,
     _loss_inter_union as tfbo_loss_inter_union,
+    generalized_box_iou_loss as tfbo_generalized_box_iou_loss,
 )
 
 
@@ -111,48 +115,90 @@ def benchmark_box_loss_inter_union(
     return BoxIoUResult(device=device, dtype=dtype, time_tfbo=tfbo, time_tv=tv)
 
 
+def benchmark_generalized_box_iou_loss(
+    device: str, dtype: torch.dtype, num_boxes: int = 100
+):
+    """
+    Benchmark the generalized box IoU loss operation.
+
+    Args:
+        device (str): Device to run the benchmark on ('cpu' or 'cuda').
+        dtype (torch.dtype): Data type of the bounding boxes.
+        num_boxes (int): Number of random boxes to generate for benchmarking.
+    """
+    torch.manual_seed(0)
+    boxes1 = torch.rand(num_boxes, 4) * 100
+    boxes2 = torch.rand(num_boxes, 4) * 100
+    boxes1 = boxes1.to(dtype=dtype, device=device)
+    boxes1.requires_grad = True
+    boxes2 = boxes2.to(dtype=dtype, device=device)
+    boxes2.requires_grad = True
+
+    # Warm-up
+    _ = tfbo_generalized_box_iou_loss(boxes1, boxes2)
+    _ = tv_generalized_box_iou_loss(boxes1, boxes2)
+
+    def _test_giou_loss(fn):
+        loss: torch.Tensor = fn(boxes1, boxes2)
+        loss.mean().backward()
+        if boxes1.device.type == "cuda":
+            torch.cuda.synchronize()
+
+    # Benchmark
+    tfbo = timeit.timeit(
+        lambda: _test_giou_loss(tfbo_generalized_box_iou_loss), number=100
+    )
+    tv = timeit.timeit(lambda: _test_giou_loss(tv_generalized_box_iou_loss), number=100)
+
+    return BoxIoUResult(device=device, dtype=dtype, time_tfbo=tfbo, time_tv=tv)
+
+
+def run_benchmark(devices: list[str], dtypes: list[torch.dtype], name: str, func):
+    """
+    Run a benchmark for the specified function across multiple devices and dtypes.
+
+    Args:
+        devices (list[str]): List of devices to run the benchmark on.
+        dtypes (list[torch.dtype]): List of data types to test.
+        name (str): Name of the benchmark for logging.
+        func (callable): Benchmark function to execute.
+    """
+    results = []
+    for device in devices:
+        for dtype in dtypes:
+            result = func(device, dtype)
+            results.append(result)
+
+    df = pd.DataFrame([r.__dict__ for r in results])
+    df["speedup"] = df["time_tv"] / df["time_tfbo"]
+    print(f"{name} Benchmark Results:")
+    print(df)
+    print("\nAverage speedup:", df["speedup"].mean())
+
+
 def run_benchmarks():
     """Run benchmarks for various configurations and print results."""
-    results = []
     devices = ["cpu", "cuda"]
     dtypes = [torch.float32, torch.float64, torch.float16, torch.int32]
 
-    for device in devices:
-        for dtype in dtypes:
-            result = benchmark_box_area(device, dtype)
-            results.append(result)
+    run_benchmark(devices, dtypes, "Box Area", benchmark_box_area)
 
-    df = pd.DataFrame([r.__dict__ for r in results])
-    df["speedup"] = df["time_tv"] / df["time_tfbo"]
-    print("Box Area Benchmark Results:")
-    print(df)
-    print("\nAverage speedup:", df["speedup"].mean())
+    run_benchmark(devices, dtypes, "Box IoU", benchmark_box_iou)
 
-    results = []
-    for device in devices:
-        for dtype in dtypes:
-            result = benchmark_box_iou(device, dtype)
-            results.append(result)
+    no_int32_dtypes = [d for d in dtypes if d != torch.int32]
+    run_benchmark(
+        devices,
+        no_int32_dtypes,
+        "Loss Intersection/Union",
+        benchmark_box_loss_inter_union,
+    )
 
-    df = pd.DataFrame([r.__dict__ for r in results])
-    df["speedup"] = df["time_tv"] / df["time_tfbo"]
-    print("\nBox IoU Benchmark Results:")
-    print(df)
-    print("\nAverage speedup:", df["speedup"].mean())
-
-    results = []
-    for device in devices:
-        for dtype in dtypes:
-            if dtype == torch.int32:
-                continue
-            result = benchmark_box_loss_inter_union(device, dtype, num_boxes=200)
-            results.append(result)
-
-    df = pd.DataFrame([r.__dict__ for r in results])
-    df["speedup"] = df["time_tv"] / df["time_tfbo"]
-    print("\nLoss Intersection/Union Benchmark Results:")
-    print(df)
-    print("\nAverage speedup:", df["speedup"].mean())
+    run_benchmark(
+        devices,
+        no_int32_dtypes,
+        "Generalized Box IoU Loss",
+        benchmark_generalized_box_iou_loss,
+    )
 
 
 if __name__ == "__main__":
