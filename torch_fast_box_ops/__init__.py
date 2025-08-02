@@ -137,18 +137,19 @@ def generalized_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
 
 
 def _generalized_box_iou_loss_context(
-    ctx, inputs: tuple[Tensor, Tensor], output: Tensor
+    ctx, inputs: tuple[Tensor, Tensor, str, float], output: Tensor
 ):
     """Save the boxes tensors for backward pass."""
     ctx.save_for_backward(inputs[0], inputs[1])
+    ctx.eps = inputs[2]
 
 
 def _generalized_box_iou_loss_backward(ctx, grad: Tensor):
     (boxes1, boxes2) = ctx.saved_tensors
     grad_boxes1, grad_boxes2 = torch.ops.box_ops.generalized_box_iou_loss_backward(
-        grad, boxes1, boxes2
+        grad, boxes1, boxes2, ctx.eps
     )
-    return grad_boxes1, grad_boxes2
+    return grad_boxes1, grad_boxes2, None
 
 
 torch.library.register_autograd(

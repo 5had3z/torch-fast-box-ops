@@ -174,3 +174,31 @@ def test_loss_giou(device: str):
     tfbo_giou = tfbo_generalized_box_iou_loss(boxes1, boxes2)
 
     torch.testing.assert_close(tfbo_giou, tv_giou)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_loss_giou_backward(device: str):
+    boxes1_tfbo, boxes2_tfbo = make_random_box_pairs(
+        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+    )
+
+    boxes1_tv = boxes1_tfbo.clone()
+    boxes2_tv = boxes2_tfbo.clone()
+
+    boxes1_tfbo.requires_grad = True
+    boxes2_tfbo.requires_grad = True
+    boxes1_tv.requires_grad = True
+    boxes2_tv.requires_grad = True
+
+    tv_giou = tv_generalized_box_iou_loss(boxes1_tv, boxes2_tv)
+    tfbo_giou = tfbo_generalized_box_iou_loss(boxes1_tfbo, boxes2_tfbo)
+
+    torch.testing.assert_close(tfbo_giou, tv_giou)
+
+    # Create random gradients for backward pass
+    tv_giou.mean().backward()
+    tfbo_giou.mean().backward()
+
+    # Check gradients
+    torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad)
+    torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad)

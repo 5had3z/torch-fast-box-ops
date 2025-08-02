@@ -475,9 +475,75 @@ auto generalized_box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &
     return giou_loss;
 }
 
+template<typename T>
+TFBO_HOST_DEVICE auto min_enclosing_area_grad(const XYXY<T> &box1, const XYXY<T> &box2, const XYXY<T> &enc_box)
+    -> std::tuple<XYXY<T>, XYXY<T>>
+{
+    XYXY<T> box1_grad, box2_grad;
+    T enc_w = enc_box.x2 - enc_box.x1;
+    T enc_h = enc_box.y2 - enc_box.y1;
+
+    bool x1_lt = box1.x1 < box2.x1;
+    bool x1_eq = box1.x1 == box2.x1;
+    box1_grad.x1 = (x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
+    box2_grad.x1 = (!x1_lt + static_cast<T>(0.5) * x1_eq) * enc_h;
+
+    bool y1_lt = box1.y1 < box2.y1;
+    bool y1_eq = box1.y1 == box2.y1;
+    box1_grad.y1 = (y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
+    box2_grad.y1 = (!y1_lt + static_cast<T>(0.5) * y1_eq) * enc_w;
+
+    bool x2_lt = box1.x2 < box2.x2;
+    bool x2_eq = box1.x2 == box2.x2;
+    box1_grad.x2 = (!x2_lt + static_cast<T>(0.5) * x2_eq) * enc_h;
+    box2_grad.x2 = (x2_lt + static_cast<T>(0.5) * x2_eq) * enc_h;
+
+    bool y2_lt = box1.y2 < box2.y2;
+    bool y2_eq = box1.y2 == box2.y2;
+    box1_grad.y2 = (!y2_lt + static_cast<T>(0.5) * y2_eq) * enc_w;
+    box2_grad.y2 = (y2_lt + static_cast<T>(0.5) * y2_eq) * enc_w;
+
+    return { box1_grad, box2_grad };
+}
+
+template<typename T>
+TFBO_HOST_DEVICE auto giou_grad(T grad, const XYXY<T> &box1, const XYXY<T> &box2, T eps) -> std::tuple<XYXY<T>, XYXY<T>>
+{
+    grad = -grad;// 1-miouk
+    XYXY<T> inter_box = box_intersection(box1, box2);
+    T inter_area = std::max(box_area_op(inter_box), static_cast<T>(0));
+    T union_area = box_area_op(box1) + box_area_op(box2) - inter_area + eps;
+    XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
+    T enc_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
+
+    T enc_area_eps = enc_area + eps;
+    T grad_enc_area = -(union_area + 2 * enc_area + eps) / (enc_area_eps * enc_area_eps);
+    auto [grad_box1_enc, grad_box2_enc] = min_enclosing_area_grad(box1, box2, enclosing_box);
+
+    T union_area_eps = union_area + eps;
+    T grad_inter = grad / union_area_eps;
+    T grad_union = grad * (1 - inter_area / (union_area_eps * union_area_eps));
+
+    auto [grad_box1, grad_box2] = inter_union_grad(grad_inter, grad_union, box1, box2);
+
+    // Combine gradients with FMA
+    grad_box1.x1 = fma(grad_box1_enc.x1, grad_enc_area, grad_box1.x1);
+    grad_box1.y1 = fma(grad_box1_enc.y1, grad_enc_area, grad_box1.y1);
+    grad_box1.x2 = fma(grad_box1_enc.x2, grad_enc_area, grad_box1.x2);
+    grad_box1.y2 = fma(grad_box1_enc.y2, grad_enc_area, grad_box1.y2);
+
+    grad_box2.x1 = fma(grad_box2_enc.x1, grad_enc_area, grad_box2.x1);
+    grad_box2.y1 = fma(grad_box2_enc.y1, grad_enc_area, grad_box2.y1);
+    grad_box2.x2 = fma(grad_box2_enc.x2, grad_enc_area, grad_box2.x2);
+    grad_box2.y2 = fma(grad_box2_enc.y2, grad_enc_area, grad_box2.y2);
+
+    return { grad_box1, grad_box2 };
+}
+
 auto generalized_box_iou_loss_backward(const torch::Tensor &grad,
     const torch::Tensor &boxes1,
-    const torch::Tensor &boxes2) -> std::tuple<torch::Tensor, torch::Tensor>
+    const torch::Tensor &boxes2,
+    double eps) -> std::tuple<torch::Tensor, torch::Tensor>
 {
     TORCH_CHECK(
         grad.is_contiguous() && boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
@@ -494,11 +560,10 @@ auto generalized_box_iou_loss_backward(const torch::Tensor &grad,
         auto grad_boxes1_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes1.mutable_data_ptr());
         auto grad_boxes2_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes2.mutable_data_ptr());
         const auto grad_ptr = grad.const_data_ptr<scalar_t>();
-
+        auto eps_t = static_cast<scalar_t>(eps);
         if (boxes1.is_cuda()) {
             auto kernel = [=] __device__(unsigned int idx) {
-                auto [grad_box1, grad_box2] =
-                    inter_union_grad(grad_ptr[idx], static_cast<scalar_t>(0), boxes1_ptr[idx], boxes2_ptr[idx]);
+                auto [grad_box1, grad_box2] = giou_grad(grad_ptr[idx], boxes1_ptr[idx], boxes2_ptr[idx], eps_t);
                 grad_boxes1_ptr[idx] = grad_box1;
                 grad_boxes2_ptr[idx] = grad_box2;
             };
@@ -506,7 +571,7 @@ auto generalized_box_iou_loss_backward(const torch::Tensor &grad,
         } else {
             for (std::size_t i = 0; i < num_boxes; ++i) {
                 std::tie(grad_boxes1_ptr[i], grad_boxes2_ptr[i]) =
-                    inter_union_grad(grad_ptr[i], static_cast<scalar_t>(0), boxes1_ptr[i], boxes2_ptr[i]);
+                    giou_grad(grad_ptr[i], boxes1_ptr[i], boxes2_ptr[i], eps_t);
             }
         }
     });
@@ -523,6 +588,7 @@ TORCH_LIBRARY_IMPL(box_ops, CPU, m)
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
     m.impl("generalized_box_iou_loss", &generalized_box_iou_loss);
+    m.impl("generalized_box_iou_loss_backward", &generalized_box_iou_loss_backward);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
@@ -534,4 +600,5 @@ TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
     m.impl("generalized_box_iou_loss", &generalized_box_iou_loss);
+    m.impl("generalized_box_iou_loss_backward", &generalized_box_iou_loss_backward);
 }
