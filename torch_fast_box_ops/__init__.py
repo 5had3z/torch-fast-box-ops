@@ -142,7 +142,7 @@ def _generalized_box_iou_loss_context(
 def _generalized_box_iou_loss_backward(ctx, grad: Tensor):
     (boxes1, boxes2) = ctx.saved_tensors
     grad_boxes1, grad_boxes2 = torch.ops.box_ops.generalized_box_iou_loss_backward(
-        grad, boxes1, boxes2, ctx.eps
+        grad.contiguous(), boxes1, boxes2, ctx.eps
     )
     return grad_boxes1, grad_boxes2, None
 

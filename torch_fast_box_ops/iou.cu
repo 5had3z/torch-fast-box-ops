@@ -192,16 +192,18 @@ __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
     unsigned int b = blockIdx.z;
     unsigned int n = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned int m = blockIdx.x * blockDim.x + threadIdx.x;
-    if (n >= N || m >= M) return;// Prevent out-of-bounds access
-    if (threadIdx.y == 0) {
+    if (threadIdx.y == 0 && m < M) {
         shared_boxes2[threadIdx.x] = boxes2[b * M + m];
         shared_boxes2_area[threadIdx.x] = box_area_op(shared_boxes2[threadIdx.x]);
     }
-    if (threadIdx.y == 1 && threadIdx.x < blockDim.y) {
-        shared_boxes1[threadIdx.x] = boxes1[b * N + blockIdx.y * blockDim.y + threadIdx.x];
+    unsigned int n_ = blockIdx.y * blockDim.y + threadIdx.x;
+    if (threadIdx.y == 1 && threadIdx.x < blockDim.y && n_ < N) {
+        shared_boxes1[threadIdx.x] = boxes1[b * N + n_];
         shared_boxes1_area[threadIdx.x] = box_area_op(shared_boxes1[threadIdx.x]);
     }
     __syncthreads();
+    if (n >= N || m >= M) return;// Prevent out-of-bounds access
+
     const auto box2 = shared_boxes2[threadIdx.x];
     const auto box1 = shared_boxes1[threadIdx.y];
     const T intersection = box_intersection_area(box1, box2);
