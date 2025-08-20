@@ -217,6 +217,33 @@ __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
     }
 }
 
+template<typename T, typename IouType, typename U = std::conditional_t<std::is_integral_v<T>, float, T>>
+__global__ void box_iou_simple_kernel(const XYXY<T> *__restrict__ boxes1,
+    const XYXY<T> *__restrict__ boxes2,
+    U *output,
+    unsigned int N,
+    unsigned int M)
+{
+    const unsigned int b = blockIdx.z;
+    const unsigned int tid = threadIdx.x + blockDim.x * blockIdx.x;
+    // Why is there no __divmod intrinsic????
+    const unsigned int n = tid / M;
+    const unsigned int m = tid % M;
+    if (n >= N || m >= M) { return; }// Prevent out-of-bounds access
+
+    const auto box1 = boxes1[b * N + n];
+    const auto box2 = boxes2[b * M + m];
+    const T intersection = box_intersection_area(box1, box2);
+    const U union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    if constexpr (std::is_same_v<IouType, iou_tag>) {
+        output[b * N * M + n * M + m] = intersection / union_area;
+    } else if constexpr (std::is_same_v<IouType, giou_tag>) {
+        XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
+        U enclosing_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
+        output[b * N * M + n * M + m] = intersection / union_area - (enclosing_area - union_area) / enclosing_area;
+    }
+}
+
 template<typename IouType>
 void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, torch::Tensor &output)
 {
@@ -230,9 +257,20 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
         auto output_ptr =
             static_cast<std::conditional_t<std::is_integral_v<scalar_t>, float, scalar_t> *>(output.mutable_data_ptr());
 
-        auto block_dim = dim3(box_iou_block_size_x, box_iou_block_size_y);
-        auto grid_dim = dim3(cuda::ceil_div(M, block_dim.x), cuda::ceil_div(N, block_dim.y), B);
-        box_iou_kernel<scalar_t, IouType><<<grid_dim, block_dim, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
+        if (N < box_iou_block_size_x || M < box_iou_block_size_y) {
+            int min_grid_size = 0;
+            int block_size = 0;
+            cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &block_size, box_iou_simple_kernel<scalar_t, IouType>);
+            block_size = std::min(static_cast<int>(M * N), block_size);
+            const auto grid_dim = dim3(cuda::ceil_div(M * N, block_size), 1, B);
+            box_iou_simple_kernel<scalar_t, IouType>
+                <<<grid_dim, block_size, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
+        } else {
+            auto block_dim = dim3(box_iou_block_size_x, box_iou_block_size_y);
+            auto grid_dim = dim3(cuda::ceil_div(M, block_dim.x), cuda::ceil_div(N, block_dim.y), B);
+            box_iou_kernel<scalar_t, IouType>
+                <<<grid_dim, block_dim, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
+        }
     });
 }
 
