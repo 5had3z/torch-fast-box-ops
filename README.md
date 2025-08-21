@@ -4,7 +4,7 @@ Fused CPU and CUDA kernels for faster bounding box operations.
 
 ## Build Requirements
 
-- CUDA Toolkit 12.8 or above (required for cuda::ceil_div convenience)
+- CUDA Toolkit (CTK) 12.8 or above (required for cuda::ceil_div convenience)
 - PyTorch 2.4 or above
 
 ## Installation
@@ -12,10 +12,24 @@ Fused CPU and CUDA kernels for faster bounding box operations.
 Most reliable method is to pip install via github so it's compiled for your cuda toolkit, arch and python version.
 
 ```sh
-pip3 install git+https://github.com/5had3z/torch-fast-box-ops
+pip3 install git+https://github.com/5had3z/torch-fast-box-ops --no-build-isolation
 ```
 
 __TODO__: Look at PyTorch's work on cuda arch wheels and stable python abi, maybe then upload to pypi
+
+### Building profile.cpp
+
+[profile.cpp](./torch_fast_box_ops/profile.cpp) is mainly used to ad-hoc run one kernel with example input to profile with nsight compute. Often to build, we need to set some args to help cmake find the right CTK and torch. The following is an example of what needs to be added to `.vscode/settings.json`, if invoking in CLI then use the same definition declarations.
+
+```json
+{
+  "cmake.configureArgs": [
+    "-DTORCH_PATH:STRING=/path/to/lib/python3.12/site-packages/torch",
+    "-DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-12.8",
+    "-DUSE_SYSTEM_NVTX:BOOL=ON",
+  ]
+}
+```
 
 ## Usage
 

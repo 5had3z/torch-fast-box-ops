@@ -262,7 +262,7 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
             int block_size = 0;
             cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &block_size, box_iou_simple_kernel<scalar_t, IouType>);
             block_size = std::min(static_cast<int>(M * N), block_size);
-            const auto grid_dim = dim3(cuda::ceil_div(M * N, block_size), 1, B);
+            const auto grid_dim = dim3(cuda::ceil_div(M * N, static_cast<unsigned int>(block_size)), 1, B);
             box_iou_simple_kernel<scalar_t, IouType>
                 <<<grid_dim, block_size, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M);
         } else {
