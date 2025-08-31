@@ -79,15 +79,11 @@ auto TFBO_HOST_DEVICE box_iou_fn(const XYXY<In> &box1, const In area1, const XYX
         Out enclosing_area = std::max(box_area_op(enclosing_box), static_cast<In>(0));
         return intersection / union_area - (enclosing_area - union_area) / enclosing_area;
     } else if constexpr (std::is_same_v<IouType, diou_tag>) {
-        auto dist_sq = [](Out p1, Out p2) { return p1 * p1 + p2 * p2; };
         XYXY<In> enclosing_box = min_enclosing_box(box1, box2);
-        const Out diag_dist_sq = dist_sq(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
-        const Out half_val = 0.5;
-        const Out box1_cx = (box1.x1 + box1.x2) * half_val;
-        const Out box1_cy = (box1.y1 + box1.y2) * half_val;
-        const Out box2_cx = (box2.x1 + box2.x2) * half_val;
-        const Out box2_cy = (box2.y1 + box2.y2) * half_val;
-        const Out cent_dist_sq = dist_sq(box1_cx - box2_cx, box1_cy - box2_cy);
+        const Out diag_dist_sq = dist_sq<Out>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
+        const CXCY box1c(box1);
+        const CXCY box2c(box2);
+        const Out cent_dist_sq = dist_sq<Out>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
         return intersection / union_area - cent_dist_sq / (diag_dist_sq + static_cast<Out>(1e-7));
     }
 }

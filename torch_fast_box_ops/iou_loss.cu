@@ -199,12 +199,49 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
 }
 
 template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag) -> T
-{}
+{
+    auto intersection = box_intersection_area(box1, box2);
+    auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
+    const T diag_dist_sq = dist_sq<T>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
+    const CXCY<T> box1c(box1);
+    const CXCY<T> box2c(box2);
+    const T cent_dist_sq = dist_sq<T>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
+    return 1 - intersection / union_area + cent_dist_sq / (diag_dist_sq + static_cast<T>(1e-7));
+}
+
+/**
+ * @brief  Gradient of a box corner p with respect to center distance squared value C -> dC/dp
+ *         is a function of the box corner (x1), its opposite corner (x2) and the other box's center point (cx)
+ *
+ * @example gradient of box1 x1 is cdist_grad(box1.x1, box1.x2, box2.cx)
+ *
+ * @tparam T type of box points
+ */
+template<typename T> TFBO_HOST_DEVICE auto cdist_grad(T p1, T p2, T p3) -> T { return 0.5 * (p1 + p2) - p3; }
 
 template<typename T>
 TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag)
     -> std::tuple<XYXY<T>, XYXY<T>>
-{}
+{
+    const T inter_area = box_intersection_area(box1, box2);
+    const T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
+    const XYXY enclosing_box = min_enclosing_box(box1, box2);
+    const CXCY box1c(box1);
+    const CXCY box2c(box2);
+    const T diag_dist_sq = dist_sq<T>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
+    const T cent_dist_sq = dist_sq<T>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
+
+    const T union_area_eps = union_area + eps;
+    const T grad_inter = -grad_loss / union_area_eps;
+    const T grad_union = grad_loss * inter_area / (union_area_eps * union_area_eps);
+
+    T grad_cent_dist = grad_loss / diag_dist_sq;
+    T grad_diag_dist = -grad_loss * cent_dist_sq / (diag_dist_sq * diag_dist_sq);
+
+    auto [grad_box1, grad_box2] = inter_union_grad(grad_inter, grad_union, box1, box2);
+    return { grad_box1, grad_box2 };
+}
 
 template<typename IoUType>
 auto box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor

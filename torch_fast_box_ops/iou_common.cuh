@@ -70,3 +70,15 @@ template<typename T> TFBO_HOST_DEVICE auto min_enclosing_box(const XYXY<T> &box1
     enclosing_box.y2 = std::max(box1.y2, box2.y2);
     return enclosing_box;
 }
+
+template<typename T> struct CXCY
+{
+    T cx;
+    T cy;
+
+    explicit TFBO_HOST_DEVICE CXCY(XYXY<T> box) noexcept
+        : cx{ static_cast<T>(0.5) * (box.x1 + box.x2) }, cy{ static_cast<T>(0.5) * (box.y1 + box.y2) }
+    {}
+};
+
+template<typename T> TFBO_HOST_DEVICE auto dist_sq(T p1, T p2) -> T { return p1 * p1 + p2 * p2; };
