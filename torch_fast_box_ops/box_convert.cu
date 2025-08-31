@@ -170,7 +170,7 @@ auto make_forward_converter() -> BoxConverter<T>
 auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, const std::string &out_fmt)
     -> torch::Tensor
 {
-    TORCH_CHECK(input.stride(-1) == 1, "Input tensor must be contiguous in last dimension");
+    TORCH_CHECK(input.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(input.size(-1) == 4, "Input tensor must have shape (..., 4) for boxes");
 
     if (in_fmt == out_fmt) {
@@ -229,7 +229,7 @@ auto make_backward_converter() -> BoxConverter<T>
 auto box_convert_backward(const torch::Tensor &out_grad, const std::string &in_fmt, const std::string &out_fmt)
     -> torch::Tensor
 {
-    TORCH_CHECK(out_grad.stride(-1) == 1, "Input tensor must be contiguous in last dimension");
+    TORCH_CHECK(out_grad.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(out_grad.size(-1) == 4, "Input tensor must have shape (..., 4) for boxes");
 
     if (in_fmt == out_fmt) {

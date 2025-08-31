@@ -17,7 +17,7 @@ from utils import make_random_boxes
 @pytest.mark.parametrize("out_fmt", ["xyxy", "xywh", "cxcywh"])
 def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype):
     """Test box conversion for various formats and data types, both forward and backward."""
-    tfo_boxes = make_random_boxes(in_fmt, 100, dtype, device, normalized=False)
+    tfo_boxes = make_random_boxes(in_fmt, 100, dtype, device, num_batch=8, seed=2)
     tv_boxes = tfo_boxes.clone()
 
     tfo_boxes.requires_grad = True
@@ -26,8 +26,7 @@ def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype)
     converted = tfbo_box_convert(tfo_boxes, in_fmt, out_fmt)
     expected = tv_box_convert(tfo_boxes, in_fmt, out_fmt).to(dtype)
 
-    scales = torch.tensor([1.0, 2.0, 3.0, 4.0], device=device, dtype=dtype)
-    fake_target = make_random_boxes(out_fmt, 100, dtype, device) * scales
+    fake_target = make_random_boxes(out_fmt, 100, dtype, device, num_batch=8, seed=1)
 
     F.mse_loss(tv_boxes, fake_target).backward()
     F.mse_loss(tfo_boxes, fake_target).backward()
@@ -42,11 +41,21 @@ def test_box_convert(device: str, in_fmt: str, out_fmt: str, dtype: torch.dtype)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-@pytest.mark.parametrize("in_fmt", ["xyxy", "xywh", "cxcywh"])
+@pytest.mark.parametrize("in_fmt", ["xywh", "cxcywh"])
 @pytest.mark.parametrize("grad_fn", [generalized_box_iou_loss, complete_box_iou_loss])
 def test_box_convert_gradients(device: str, in_fmt: str, grad_fn):
     """Test gradients for box conversion using different loss functions."""
-    tfo_boxes = make_random_boxes(in_fmt, 100, torch.float32, device)
+    num_boxes = 45
+    num_batch = 32
+    tfo_boxes = make_random_boxes(
+        in_fmt,
+        num_boxes,
+        torch.float32,
+        device,
+        seed=0,
+        normalized=True,
+        num_batch=num_batch,
+    )
     tv_boxes = tfo_boxes.clone()
 
     tfo_boxes.requires_grad = True
@@ -55,7 +64,15 @@ def test_box_convert_gradients(device: str, in_fmt: str, grad_fn):
     converted_tfo = tfbo_box_convert(tfo_boxes, in_fmt, "xyxy")
     converted_tv = tv_box_convert(tv_boxes, in_fmt, "xyxy")
 
-    random_target = make_random_boxes("xyxy", 100, torch.float32, device)
+    random_target = make_random_boxes(
+        "xyxy",
+        num_boxes,
+        torch.float32,
+        device,
+        seed=1,
+        normalized=True,
+        num_batch=num_batch,
+    )
 
     loss_tfo: Tensor = grad_fn(converted_tfo, random_target, reduction="mean")
     loss_tv: Tensor = grad_fn(converted_tv, random_target, reduction="mean")

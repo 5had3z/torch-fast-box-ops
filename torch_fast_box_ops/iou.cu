@@ -14,7 +14,7 @@ template<typename T> TFBO_HOST_DEVICE auto box_area_op(const XYXY<T> &box) -> T
 
 auto box_area(const torch::Tensor &boxes) -> torch::Tensor
 {
-    TORCH_CHECK(boxes.stride(-1) == 1, "Input tensor must be contiguous in last dimension");
+    TORCH_CHECK(boxes.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(boxes.size(-1) == 4, "Input tensor must have shape (..., 4) for boxes");
 
     // Output shape is the same shape as input except the last dimension
@@ -61,8 +61,8 @@ template<typename T> auto TFBO_HOST_DEVICE box_area_backward_(T grad, XYXY<T> bo
 
 auto box_area_backward(const torch::Tensor &grad, const torch::Tensor &boxes) -> torch::Tensor
 {
-    TORCH_CHECK(grad.stride(-1) == 1, "Gradient tensor must be contiguous in last dimension");
-    TORCH_CHECK(boxes.stride(-1) == 1, "Boxes tensor must be contiguous in last dimension");
+    TORCH_CHECK(grad.is_contiguous(), "Gradient tensor must be contiguous");
+    TORCH_CHECK(boxes.is_contiguous(), "Boxes tensor must be contiguous");
     TORCH_CHECK(boxes.size(-1) == 4, "Boxes tensor must have shape (..., 4)");
 
     auto input_grad = torch::empty_like(boxes);
