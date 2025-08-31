@@ -155,17 +155,33 @@ void box_iou_cpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
         for (int b = 0; b < B; ++b) {
             std::transform(boxes2_ptr + b * M, boxes2_ptr + (b + 1) * M, areas2.begin(), box_area_op<scalar_t>);
             for (int n = 0; n < N; ++n) {
-                const scalar_t area1 = box_area_op(boxes1_ptr[b * N + n]);
+                const auto &box1 = boxes1_ptr[b * N + n];
+                const scalar_t area1 = box_area_op(box1);
                 for (int m = 0; m < M; ++m) {
-                    const scalar_t intersection = box_intersection_area(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
+                    const auto &box2 = boxes2_ptr[b * M + m];
+                    const scalar_t intersection = box_intersection_area(box1, box2);
                     const output_t union_area = area1 + areas2[m] - intersection;
+                    auto &out_box = output_ptr[b * N * M + n * M + m];
                     if constexpr (std::is_same_v<IouType, iou_tag>) {
-                        output_ptr[b * N * M + n * M + m] = intersection / union_area;
+                        out_box = intersection / union_area;
                     } else if constexpr (std::is_same_v<IouType, giou_tag>) {
-                        XYXY<scalar_t> enclosing_box = min_enclosing_box(boxes1_ptr[b * N + n], boxes2_ptr[b * M + m]);
+                        XYXY<scalar_t> enclosing_box = min_enclosing_box(box1, box2);
                         output_t enclosing_area = std::max(box_area_op(enclosing_box), static_cast<scalar_t>(0));
-                        output_ptr[b * N * M + n * M + m] =
-                            intersection / union_area - (enclosing_area - union_area) / enclosing_area;
+                        out_box = intersection / union_area - (enclosing_area - union_area) / enclosing_area;
+                    } else if constexpr (std::is_same_v<IouType, diou_tag>) {
+                        XYXY<scalar_t> enclosing_box = min_enclosing_box(box1, box2);
+                        const output_t diag_dist_sq =
+                            std::pow(enclosing_box.x2 - enclosing_box.x1, static_cast<output_t>(2))
+                            + std::pow(enclosing_box.y2 - enclosing_box.y1, static_cast<output_t>(2));
+                        const output_t half_val = 0.5;
+                        const output_t box1_cx = (box1.x1 + box1.x2) * half_val;
+                        const output_t box1_cy = (box1.y1 + box1.y2) * half_val;
+                        const output_t box2_cx = (box2.x1 + box2.x2) * half_val;
+                        const output_t box2_cy = (box2.y1 + box2.y2) * half_val;
+                        const output_t cent_dist_sq = std::pow(box1_cx - box2_cx, static_cast<output_t>(2))
+                                                      + std::pow(box1_cy - box2_cy, static_cast<output_t>(2));
+                        out_box = intersection / union_area
+                                  - cent_dist_sq / (diag_dist_sq + std::numeric_limits<output_t>::epsilon());
                     }
                 }
             }
@@ -208,12 +224,25 @@ __global__ void box_iou_kernel(const XYXY<T> *__restrict__ boxes1,
     const auto box1 = shared_boxes1[threadIdx.y];
     const T intersection = box_intersection_area(box1, box2);
     const U union_area = shared_boxes1_area[threadIdx.y] + shared_boxes2_area[threadIdx.x] - intersection;
+    auto &out_box = output[b * N * M + n * M + m];
     if constexpr (std::is_same_v<IouType, iou_tag>) {
-        output[b * N * M + n * M + m] = intersection / union_area;
+        out_box = intersection / union_area;
     } else if constexpr (std::is_same_v<IouType, giou_tag>) {
         XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
         U enclosing_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
-        output[b * N * M + n * M + m] = intersection / union_area - (enclosing_area - union_area) / enclosing_area;
+        out_box = intersection / union_area - (enclosing_area - union_area) / enclosing_area;
+    } else if constexpr (std::is_same_v<IouType, diou_tag>) {
+        XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
+        const U diag_dist_sq = std::pow(enclosing_box.x2 - enclosing_box.x1, static_cast<U>(2))
+                               + std::pow(enclosing_box.y2 - enclosing_box.y1, static_cast<U>(2));
+        const U half_val = 0.5;
+        const U box1_cx = static_cast<U>(box1.x1 + box1.x2) * half_val;
+        const U box1_cy = static_cast<U>(box1.y1 + box1.y2) * half_val;
+        const U box2_cx = static_cast<U>(box2.x1 + box2.x2) * half_val;
+        const U box2_cy = static_cast<U>(box2.y1 + box2.y2) * half_val;
+        const U cent_dist_sq =
+            std::pow(box1_cx - box2_cx, static_cast<U>(2)) + std::pow(box1_cy - box2_cy, static_cast<U>(2));
+        out_box = intersection / union_area - cent_dist_sq / (diag_dist_sq + std::numeric_limits<U>::epsilon());
     }
 }
 
@@ -632,6 +661,7 @@ TORCH_LIBRARY_IMPL(box_ops, CPU, m)
     m.impl("box_area", &box_area);
     m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("generalized_box_iou", &box_iou<giou_tag>);
+    m.impl("distance_box_iou", &box_iou<diou_tag>);
     m.impl("box_area_backward", &box_area_backward);
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
@@ -644,6 +674,7 @@ TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
     m.impl("box_area", &box_area);
     m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("generalized_box_iou", &box_iou<giou_tag>);
+    m.impl("distance_box_iou", &box_iou<diou_tag>);
     m.impl("box_area_backward", &box_area_backward);
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
