@@ -19,7 +19,11 @@ TORCH_LIBRARY(box_ops, m)
     m.def(
         "_loss_inter_union_backward(Tensor grad_inter, Tensor grad_union, Tensor boxes1, Tensor boxes2) -> (Tensor, "
         "Tensor)");
+
     m.def("generalized_box_iou_loss(Tensor boxes1, Tensor boxes2, float eps) -> Tensor");
     m.def(
         "generalized_box_iou_loss_backward(Tensor grad, Tensor boxes1, Tensor boxes2, float eps) -> (Tensor, Tensor)");
+
+    m.def("distance_box_iou_loss(Tensor boxes1, Tensor boxes2, float eps) -> Tensor");
+    m.def("distance_box_iou_loss_backward(Tensor grad, Tensor boxes1, Tensor boxes2, float eps) -> (Tensor, Tensor)");
 }

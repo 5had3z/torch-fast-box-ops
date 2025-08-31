@@ -155,7 +155,7 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
     return { grad_boxes1, grad_boxes2 };
 }
 
-template<typename T> TFBO_HOST_DEVICE auto giou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps) -> T
+template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps, giou_tag) -> T
 {
     auto intersection = box_intersection_area(box1, box2);
     auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
@@ -165,34 +165,117 @@ template<typename T> TFBO_HOST_DEVICE auto giou_loss_fn(const XYXY<T> &box1, con
     return 1 - giou;
 }
 
-auto generalized_box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor
+template<typename T>
+TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, giou_tag)
+    -> std::tuple<XYXY<T>, XYXY<T>>
+{
+    T inter_area = box_intersection_area(box1, box2);
+    T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
+    XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
+    T enc_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
+
+    T enc_area_eps = enc_area + eps;
+    T union_area_eps = union_area + eps;
+
+    T grad_enc_area = grad_loss * union_area / (enc_area_eps * enc_area_eps);
+    T grad_inter = -grad_loss / union_area_eps;
+    T grad_union = grad_loss * (inter_area / (union_area_eps * union_area_eps) - 1 / enc_area_eps);
+
+    auto [grad_box1_enc, grad_box2_enc] = min_enclosing_box_grad(box1, box2, enclosing_box);
+    auto [grad_box1, grad_box2] = inter_union_grad(grad_inter, grad_union, box1, box2);
+
+    // Combine gradients with FMA
+    grad_box1.x1 = fma(grad_box1_enc.x1, grad_enc_area, grad_box1.x1);
+    grad_box1.y1 = fma(grad_box1_enc.y1, grad_enc_area, grad_box1.y1);
+    grad_box1.x2 = fma(grad_box1_enc.x2, grad_enc_area, grad_box1.x2);
+    grad_box1.y2 = fma(grad_box1_enc.y2, grad_enc_area, grad_box1.y2);
+
+    grad_box2.x1 = fma(grad_box2_enc.x1, grad_enc_area, grad_box2.x1);
+    grad_box2.y1 = fma(grad_box2_enc.y1, grad_enc_area, grad_box2.y1);
+    grad_box2.x2 = fma(grad_box2_enc.x2, grad_enc_area, grad_box2.x2);
+    grad_box2.y2 = fma(grad_box2_enc.y2, grad_enc_area, grad_box2.y2);
+
+    return { grad_box1, grad_box2 };
+}
+
+template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag) -> T
+{}
+
+template<typename T>
+TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag)
+    -> std::tuple<XYXY<T>, XYXY<T>>
+{}
+
+template<typename IoUType>
+auto box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor
 {
     TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
 
-    auto giou_loss = boxes1.new_empty({ boxes1.size(0) });
+    auto loss = boxes1.new_empty({ boxes1.size(0) });
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "generalized_box_iou_loss", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "box_iou_loss", [&] {
         const auto num_boxes = boxes1.size(0);
         const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
         const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
-        auto giou_loss_ptr = giou_loss.mutable_data_ptr<scalar_t>();
+        auto loss_ptr = loss.mutable_data_ptr<scalar_t>();
         const auto eps_t = static_cast<scalar_t>(eps);
 
         if (boxes1.is_cuda()) {
             auto kernel = [=] __device__(unsigned int idx) {
-                giou_loss_ptr[idx] = giou_loss_fn(boxes1_ptr[idx], boxes2_ptr[idx], eps_t);
+                loss_ptr[idx] = iou_loss_fn(boxes1_ptr[idx], boxes2_ptr[idx], eps_t, IoUType{});
             };
             launch_elementwise_kernel(kernel, num_boxes, at::cuda::getCurrentCUDAStream());
         } else {
             for (std::size_t i = 0; i < num_boxes; ++i) {
-                giou_loss_ptr[i] = giou_loss_fn(boxes1_ptr[i], boxes2_ptr[i], eps_t);
+                loss_ptr[i] = iou_loss_fn(boxes1_ptr[i], boxes2_ptr[i], eps_t, IoUType{});
             }
         }
     });
 
-    return giou_loss;
+    return loss;
+}
+
+template<typename IoUType>
+auto box_iou_loss_backward(const torch::Tensor &grad,
+    const torch::Tensor &boxes1,
+    const torch::Tensor &boxes2,
+    double eps) -> std::tuple<torch::Tensor, torch::Tensor>
+{
+    TORCH_CHECK(
+        grad.is_contiguous() && boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
+    TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
+    TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
+
+    auto grad_boxes1 = torch::empty_like(boxes1);
+    auto grad_boxes2 = torch::empty_like(boxes2);
+
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "box_iou_loss_backward", [&] {
+        const auto num_boxes = boxes1.size(0);
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        auto grad_boxes1_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes1.mutable_data_ptr());
+        auto grad_boxes2_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes2.mutable_data_ptr());
+        const auto grad_ptr = grad.const_data_ptr<scalar_t>();
+        auto eps_t = static_cast<scalar_t>(eps);
+        if (boxes1.is_cuda()) {
+            auto kernel = [=] __device__(unsigned int idx) {
+                auto [grad_box1, grad_box2] =
+                    iou_grad(grad_ptr[idx], boxes1_ptr[idx], boxes2_ptr[idx], eps_t, IoUType{});
+                grad_boxes1_ptr[idx] = grad_box1;
+                grad_boxes2_ptr[idx] = grad_box2;
+            };
+            launch_elementwise_kernel(kernel, num_boxes, at::cuda::getCurrentCUDAStream());
+        } else {
+            for (std::size_t i = 0; i < num_boxes; ++i) {
+                std::tie(grad_boxes1_ptr[i], grad_boxes2_ptr[i]) =
+                    iou_grad(grad_ptr[i], boxes1_ptr[i], boxes2_ptr[i], eps_t, IoUType{});
+            }
+        }
+    });
+
+    return { grad_boxes1, grad_boxes2 };
 }
 
 template<typename T>
@@ -231,91 +314,23 @@ TFBO_HOST_DEVICE auto min_enclosing_box_grad(const XYXY<T> &box1, const XYXY<T> 
     return { box1_grad, box2_grad };
 }
 
-template<typename T>
-TFBO_HOST_DEVICE auto giou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps)
-    -> std::tuple<XYXY<T>, XYXY<T>>
-{
-    T inter_area = box_intersection_area(box1, box2);
-    T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
-    XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
-    T enc_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
-
-    T enc_area_eps = enc_area + eps;
-    T union_area_eps = union_area + eps;
-
-    T grad_enc_area = grad_loss * union_area / (enc_area_eps * enc_area_eps);
-    T grad_inter = -grad_loss / union_area_eps;
-    T grad_union = grad_loss * (inter_area / (union_area_eps * union_area_eps) - 1 / enc_area_eps);
-
-    auto [grad_box1_enc, grad_box2_enc] = min_enclosing_box_grad(box1, box2, enclosing_box);
-    auto [grad_box1, grad_box2] = inter_union_grad(grad_inter, grad_union, box1, box2);
-
-    // Combine gradients with FMA
-    grad_box1.x1 = fma(grad_box1_enc.x1, grad_enc_area, grad_box1.x1);
-    grad_box1.y1 = fma(grad_box1_enc.y1, grad_enc_area, grad_box1.y1);
-    grad_box1.x2 = fma(grad_box1_enc.x2, grad_enc_area, grad_box1.x2);
-    grad_box1.y2 = fma(grad_box1_enc.y2, grad_enc_area, grad_box1.y2);
-
-    grad_box2.x1 = fma(grad_box2_enc.x1, grad_enc_area, grad_box2.x1);
-    grad_box2.y1 = fma(grad_box2_enc.y1, grad_enc_area, grad_box2.y1);
-    grad_box2.x2 = fma(grad_box2_enc.x2, grad_enc_area, grad_box2.x2);
-    grad_box2.y2 = fma(grad_box2_enc.y2, grad_enc_area, grad_box2.y2);
-
-    return { grad_box1, grad_box2 };
-}
-
-auto generalized_box_iou_loss_backward(const torch::Tensor &grad,
-    const torch::Tensor &boxes1,
-    const torch::Tensor &boxes2,
-    double eps) -> std::tuple<torch::Tensor, torch::Tensor>
-{
-    TORCH_CHECK(
-        grad.is_contiguous() && boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
-    TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
-    TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
-
-    auto grad_boxes1 = torch::empty_like(boxes1);
-    auto grad_boxes2 = torch::empty_like(boxes2);
-
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "generalized_box_iou_loss_backward", [&] {
-        const auto num_boxes = boxes1.size(0);
-        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
-        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
-        auto grad_boxes1_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes1.mutable_data_ptr());
-        auto grad_boxes2_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes2.mutable_data_ptr());
-        const auto grad_ptr = grad.const_data_ptr<scalar_t>();
-        auto eps_t = static_cast<scalar_t>(eps);
-        if (boxes1.is_cuda()) {
-            auto kernel = [=] __device__(unsigned int idx) {
-                auto [grad_box1, grad_box2] = giou_grad(grad_ptr[idx], boxes1_ptr[idx], boxes2_ptr[idx], eps_t);
-                grad_boxes1_ptr[idx] = grad_box1;
-                grad_boxes2_ptr[idx] = grad_box2;
-            };
-            launch_elementwise_kernel(kernel, num_boxes, at::cuda::getCurrentCUDAStream());
-        } else {
-            for (std::size_t i = 0; i < num_boxes; ++i) {
-                std::tie(grad_boxes1_ptr[i], grad_boxes2_ptr[i]) =
-                    giou_grad(grad_ptr[i], boxes1_ptr[i], boxes2_ptr[i], eps_t);
-            }
-        }
-    });
-
-    return { grad_boxes1, grad_boxes2 };
-}
-
 
 TORCH_LIBRARY_IMPL(box_ops, CPU, m)
 {
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
-    m.impl("generalized_box_iou_loss", &generalized_box_iou_loss);
-    m.impl("generalized_box_iou_loss_backward", &generalized_box_iou_loss_backward);
+    m.impl("generalized_box_iou_loss", &box_iou_loss<giou_tag>);
+    m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
+    m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
+    m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
 {
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
-    m.impl("generalized_box_iou_loss", &generalized_box_iou_loss);
-    m.impl("generalized_box_iou_loss_backward", &generalized_box_iou_loss_backward);
+    m.impl("generalized_box_iou_loss", &box_iou_loss<giou_tag>);
+    m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
+    m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
+    m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
 }
