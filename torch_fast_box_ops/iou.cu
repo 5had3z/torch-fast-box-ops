@@ -81,8 +81,8 @@ auto TFBO_HOST_DEVICE box_iou_fn(const XYXY<In> &box1, const In area1, const XYX
     } else if constexpr (std::is_same_v<IouType, diou_tag>) {
         XYXY<In> enclosing_box = min_enclosing_box(box1, box2);
         const Out diag_dist_sq = dist_sq<Out>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
-        const CXCY box1c(box1);
-        const CXCY box2c(box2);
+        const CXCY<Out> box1c(box1);
+        const CXCY<Out> box2c(box2);
         const Out cent_dist_sq = dist_sq<Out>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
         return intersection / union_area - cent_dist_sq / (diag_dist_sq + static_cast<Out>(1e-7));
     }

@@ -76,7 +76,8 @@ template<typename T> struct CXCY
     T cx;
     T cy;
 
-    explicit TFBO_HOST_DEVICE CXCY(XYXY<T> box) noexcept
+    template<typename U>
+    explicit TFBO_HOST_DEVICE CXCY(XYXY<U> box) noexcept
         : cx{ static_cast<T>(0.5) * (box.x1 + box.x2) }, cy{ static_cast<T>(0.5) * (box.y1 + box.y2) }
     {}
 };

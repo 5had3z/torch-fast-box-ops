@@ -248,8 +248,8 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
     const T inter_area = box_intersection_area(box1, box2);
     const T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
     const XYXY enclosing_box = min_enclosing_box(box1, box2);
-    const CXCY box1c(box1);
-    const CXCY box2c(box2);
+    const CXCY<T> box1c(box1);
+    const CXCY<T> box2c(box2);
     const T diag_dist_sq = dist_sq<T>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
     const T cent_dist_sq = dist_sq<T>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
 
