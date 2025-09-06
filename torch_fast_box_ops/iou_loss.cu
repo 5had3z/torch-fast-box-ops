@@ -314,6 +314,50 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
     return { grad_box1, grad_box2 };
 }
 
+
+template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps, ciou_tag) -> T
+{
+    const auto diou_loss = iou_loss_fn(box1, box2, eps, diou_tag{});
+    const auto intersection = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    const auto iou = intersection / union_area;
+
+    const auto aspect =
+        std::atan(box1.width() / (box1.height() + eps)) - std::atan(box2.width() / (box2.height() + eps));
+    const auto v = 4 / (M_PI * M_PI) * aspect * aspect;
+    const auto alpha = v / (1 - iou + v + eps);
+    return diou_loss + alpha * v;
+}
+
+/**
+ * @brief Negative for x11
+ *
+ * @tparam T
+ * @param p1
+ * @param p2
+ * @param l
+ * @return T
+ */
+template<typename T> TFBO_HOST_DEVICE auto ciou_value_x_grad(T w, T h) -> T { return w / (w * w + h * h); }
+
+template<typename T>
+TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, ciou_tag)
+    -> std::tuple<XYXY<T>, XYXY<T>>
+{
+    const auto intersection = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    const auto iou = intersection / union_area;
+
+    const auto aspect =
+        std::atan(box1.width() / (box1.height() + eps)) - std::atan(box2.width() / (box2.height() + eps));
+    const auto v = 4 / (M_PI * M_PI) * aspect * aspect;
+    const auto alpha = v / (1 - iou + v + eps);
+
+    auto [box1grad, box2grad] = iou_grad(grad_loss, box1, box2, eps, diou_tag{});
+
+    return { box1grad, box2grad };
+}
+
 template<typename IoUType>
 auto box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor
 {
@@ -431,6 +475,8 @@ TORCH_LIBRARY_IMPL(box_ops, CPU, m)
     m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
     m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
     m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
+    m.impl("complete_box_iou_loss", &box_iou_loss<ciou_tag>);
+    m.impl("complete_box_iou_loss_backward", &box_iou_loss_backward<ciou_tag>);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
@@ -441,4 +487,6 @@ TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
     m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
     m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
     m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
+    m.impl("complete_box_iou_loss", &box_iou_loss<ciou_tag>);
+    m.impl("complete_box_iou_loss_backward", &box_iou_loss_backward<ciou_tag>);
 }

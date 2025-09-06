@@ -89,11 +89,8 @@ auto TFBO_HOST_DEVICE box_iou_fn(const XYXY<In> &box1, const In area1, const XYX
         if constexpr (std::is_same_v<IouType, diou_tag>) {
             return diou;
         } else {
-            const auto box1_w = box1.x2 - box1.x1;
-            const auto box1_h = box1.y2 - box1.y1;
-            const auto box2_w = box2.x2 - box2.x1;
-            const auto box2_h = box2.y2 - box2.y1;
-            const auto aspect = std::atan(box1_w / (box1_h + 1e-7)) - std::atan(box2_w / (box2_h + 1e-7));
+            const auto aspect =
+                std::atan(box1.width() / (box1.height() + 1e-7)) - std::atan(box2.width() / (box2.height() + 1e-7));
             const auto v = (4 / (M_PI * M_PI)) * aspect * aspect;
             const auto alpha = v / (1 - iou + v + 1e-7);
             return diou - alpha * v;

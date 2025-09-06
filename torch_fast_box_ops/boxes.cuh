@@ -2,6 +2,8 @@
 
 #include <ATen/Dispatch.h>
 
+#include "kernel.cuh"
+
 template<typename T> struct box_aligned_size
 {
     static constexpr size_t value = sizeof(T) * 4;
@@ -44,6 +46,10 @@ template<typename T> struct alignas(box_aligned_size<T>::value) XYXY
         };
         typename aligned_type<T, 4>::vec_t vec;// maps to float4, int4, etc.
     };
+
+    [[nodiscard]] TFBO_HOST_DEVICE auto width() const noexcept -> T { return x2 - x1; }
+
+    [[nodiscard]] TFBO_HOST_DEVICE auto height() const noexcept -> T { return y2 - y1; }
 };
 
 template<typename T> struct alignas(box_aligned_size<T>::value) XYWH
