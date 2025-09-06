@@ -217,6 +217,18 @@ def test_loss_giou(device: str):
     torch.testing.assert_close(tfbo_giou, tv_giou)
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_loss_diou(device: str):
+    boxes1, boxes2 = make_random_box_pairs(
+        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+    )
+
+    tv_diou = tv_distance_box_iou_loss(boxes1, boxes2)
+    tfbo_diou = tfbo_distance_box_iou_loss(boxes1, boxes2)
+
+    torch.testing.assert_close(tfbo_diou, tv_diou)
+
+
 def _test_backward_box_iou(tfbo_fn: IouFn, tv_fn: IouFn, device: torch.device):
     boxes1_tfbo, boxes2_tfbo = make_random_box_pairs(
         "xyxy", 1000, dtype=torch.float32, device=device, normalized=True
