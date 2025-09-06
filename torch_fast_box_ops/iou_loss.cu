@@ -237,7 +237,7 @@ template<typename T> TFBO_HOST_DEVICE auto cdist_grad(T p1, T p2, T p3) -> T { r
 template<typename T> TFBO_HOST_DEVICE auto ddist_grad_tl(T p1, T p2, T l) -> T
 {
     T scale = 1 + static_cast<T>(p1 < p2);
-    scale *= static_cast<T>(p1 > p2);
+    scale *= static_cast<T>(p1 <= p2);
     return -scale * l;
 }
 
@@ -257,7 +257,7 @@ template<typename T> TFBO_HOST_DEVICE auto ddist_grad_tl(T p1, T p2, T l) -> T
 template<typename T> TFBO_HOST_DEVICE auto ddist_grad_br(T p1, T p2, T l) -> T
 {
     T scale = 1 + static_cast<T>(p1 > p2);
-    scale *= static_cast<T>(p1 < p2);
+    scale *= static_cast<T>(p1 >= p2);
     return scale * l;
 }
 
