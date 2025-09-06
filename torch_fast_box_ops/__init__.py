@@ -226,7 +226,7 @@ def _distance_box_iou_loss_backward(ctx, grad: Tensor):
 
 
 torch.library.register_autograd(
-    "box_ops::generalized_box_iou_loss",
+    "box_ops::distance_box_iou_loss",
     _distance_box_iou_loss_backward,
     setup_context=_box_iou_loss_context,
 )

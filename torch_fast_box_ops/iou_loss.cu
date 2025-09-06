@@ -220,6 +220,27 @@ template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, cons
  */
 template<typename T> TFBO_HOST_DEVICE auto cdist_grad(T p1, T p2, T p3) -> T { return 0.5 * (p1 + p2) - p3; }
 
+
+/**
+ * @brief  Gradient of box corner p with respect to the enclosing box distance squared value D -> dC/dp is a
+ *         function of the box corner (p1), the corner of the other box (p2) and the smallest enclosing box's
+ *         opposite point (c2)
+ *
+ * @example gradient of box1 x1 is ddist_grad(box1.x1, box2.x1, enclosing_box.x2)
+ *
+ * @tparam T type of box points
+ * @param p1 point we want to find gradient of
+ * @param p2 the other boxes same corner point
+ * @param c2 the smallest enclosing box's opposite point
+ * @return the gradient of the box point p1
+ */
+template<typename T> TFBO_HOST_DEVICE auto ddist_grad(T p1, T p2, T c2) -> T
+{
+    T scale = 1 + static_cast<T>(p1 < p2);
+    scale *= static_cast<T>(p1 == p2);
+    return scale * (p1 - c2);
+}
+
 template<typename T>
 TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag)
     -> std::tuple<XYXY<T>, XYXY<T>>
@@ -240,6 +261,32 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
     T grad_diag_dist = -grad_loss * cent_dist_sq / (diag_dist_sq * diag_dist_sq);
 
     auto [grad_box1, grad_box2] = inter_union_grad(grad_inter, grad_union, box1, box2);
+
+    // Box 1 gradient
+    // Center term
+    grad_box1.x1 = fma(grad_cent_dist, cdist_grad(box1.x1, box1.x2, box2c.cx), grad_box1.x1);
+    grad_box1.y1 = fma(grad_cent_dist, cdist_grad(box1.y1, box1.y2, box2c.cy), grad_box1.y1);
+    grad_box1.x2 = fma(grad_cent_dist, cdist_grad(box1.x2, box1.x1, box2c.cx), grad_box1.x2);
+    grad_box1.y2 = fma(grad_cent_dist, cdist_grad(box1.y2, box1.y1, box2c.cy), grad_box1.y2);
+    // Diag term
+    grad_box1.x1 = fma(grad_diag_dist, ddist_grad(box1.x1, box2.x1, enclosing_box.x2), grad_box1.x1);
+    grad_box1.y1 = fma(grad_diag_dist, ddist_grad(box1.y1, box2.y1, enclosing_box.y2), grad_box1.y1);
+    grad_box1.x2 = fma(grad_diag_dist, ddist_grad(box1.x2, box2.x2, enclosing_box.x1), grad_box1.x2);
+    grad_box1.y2 = fma(grad_diag_dist, ddist_grad(box1.y2, box2.y2, enclosing_box.y1), grad_box1.y2);
+
+    // Box 2 gradient
+    // Center term
+    grad_box2.x1 = fma(grad_cent_dist, cdist_grad(box2.x1, box2.x2, box1c.cx), grad_box2.x1);
+    grad_box2.y1 = fma(grad_cent_dist, cdist_grad(box2.y1, box2.y2, box1c.cy), grad_box2.y1);
+    grad_box2.x2 = fma(grad_cent_dist, cdist_grad(box2.x2, box2.x1, box1c.cx), grad_box2.x2);
+    grad_box2.y2 = fma(grad_cent_dist, cdist_grad(box2.y2, box2.y1, box1c.cy), grad_box2.y2);
+
+    // Diag term
+    grad_box2.x1 = fma(grad_diag_dist, ddist_grad(box2.x1, box1.x1, enclosing_box.x2), grad_box2.x1);
+    grad_box2.y1 = fma(grad_diag_dist, ddist_grad(box2.y1, box1.y1, enclosing_box.y2), grad_box2.y1);
+    grad_box2.x2 = fma(grad_diag_dist, ddist_grad(box2.x2, box1.x2, enclosing_box.x1), grad_box2.x2);
+    grad_box2.y2 = fma(grad_diag_dist, ddist_grad(box2.y2, box1.y2, enclosing_box.y1), grad_box2.y2);
+
     return { grad_box1, grad_box2 };
 }
 

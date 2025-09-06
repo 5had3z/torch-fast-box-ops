@@ -12,6 +12,7 @@ from torchvision.ops.boxes import (
 from torchvision.ops.giou_loss import (
     generalized_box_iou_loss as tv_generalized_box_iou_loss,
 )
+from torchvision.ops.diou_loss import distance_box_iou_loss as tv_distance_box_iou_loss
 from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
 from torch_fast_box_ops import (
     box_area as tfbo_box_area,
@@ -20,6 +21,7 @@ from torch_fast_box_ops import (
     generalized_box_iou as tfbo_generalized_box_iou,
     generalized_box_iou_loss as tfbo_generalized_box_iou_loss,
     distance_box_iou as tfbo_distance_box_iou,
+    distance_box_iou_loss as tfbo_distance_box_iou_loss,
 )
 
 from utils import make_random_boxes, make_random_box_pairs
@@ -215,8 +217,7 @@ def test_loss_giou(device: str):
     torch.testing.assert_close(tfbo_giou, tv_giou)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_loss_giou_backward(device: str):
+def _test_backward_box_iou(tfbo_fn: IouFn, tv_fn: IouFn, device: torch.device):
     boxes1_tfbo, boxes2_tfbo = make_random_box_pairs(
         "xyxy", 1000, dtype=torch.float32, device=device, normalized=True
     )
@@ -229,8 +230,8 @@ def test_loss_giou_backward(device: str):
     boxes1_tv.requires_grad = True
     boxes2_tv.requires_grad = True
 
-    tv_giou = tv_generalized_box_iou_loss(boxes1_tv, boxes2_tv)
-    tfbo_giou = tfbo_generalized_box_iou_loss(boxes1_tfbo, boxes2_tfbo)
+    tv_giou = tv_fn(boxes1_tv, boxes2_tv)
+    tfbo_giou = tfbo_fn(boxes1_tfbo, boxes2_tfbo)
 
     torch.testing.assert_close(tfbo_giou, tv_giou, rtol=1e-5, atol=2e-5)
 
@@ -241,3 +242,15 @@ def test_loss_giou_backward(device: str):
     # Check gradients
     torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad)
     torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad)
+
+
+@pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+def test_loss_giou_backward(device: torch.device):
+    _test_backward_box_iou(
+        tfbo_generalized_box_iou_loss, tv_generalized_box_iou_loss, device
+    )
+
+
+@pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+def test_loss_diou_backward(device: torch.device):
+    _test_backward_box_iou(tfbo_distance_box_iou_loss, tv_distance_box_iou_loss, device)
