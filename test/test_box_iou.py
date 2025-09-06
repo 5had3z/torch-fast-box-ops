@@ -1,3 +1,5 @@
+from typing import Callable
+
 import pytest
 import torch
 from torch.nn import functional as F
@@ -5,10 +7,12 @@ from torchvision.ops.boxes import (
     box_area as tv_box_area,
     box_iou as tv_box_iou,
     generalized_box_iou as tv_generalized_box_iou,
+    distance_box_iou as tv_distance_box_iou,
 )
 from torchvision.ops.giou_loss import (
     generalized_box_iou_loss as tv_generalized_box_iou_loss,
 )
+from torchvision.ops.diou_loss import distance_box_iou_loss as tv_distance_box_iou_loss
 from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
 from torch_fast_box_ops import (
     box_area as tfbo_box_area,
@@ -16,9 +20,13 @@ from torch_fast_box_ops import (
     _loss_inter_union as tfbo_loss_inter_union,
     generalized_box_iou as tfbo_generalized_box_iou,
     generalized_box_iou_loss as tfbo_generalized_box_iou_loss,
+    distance_box_iou as tfbo_distance_box_iou,
+    distance_box_iou_loss as tfbo_distance_box_iou_loss,
 )
 
 from utils import make_random_boxes, make_random_box_pairs
+
+IouFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -89,13 +97,14 @@ def test_box_iou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tup
         torch.testing.assert_close(tfbo_iou, tv_iou)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-@pytest.mark.parametrize("num_batch", [1, 4])
-@pytest.mark.parametrize(
-    "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
-)
-@pytest.mark.parametrize("num_boxes", [(10, 12), (31, 32), (91, 318)])
-def test_box_giou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tuple):
+def run_box_iou_test(
+    device: str,
+    num_batch: int,
+    dtype: torch.dtype,
+    num_boxes: tuple,
+    iou_tfbo: IouFn,
+    iou_tv: IouFn,
+):
     boxes1 = make_random_boxes(
         "xyxy", num_boxes[0], dtype=dtype, device=device, num_batch=num_batch, seed=0
     )
@@ -104,13 +113,11 @@ def test_box_giou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tu
     )
 
     if num_batch > 1:
-        tv_iou = torch.stack(
-            [tv_generalized_box_iou(b1, b2) for b1, b2 in zip(boxes1, boxes2)]
-        )
+        tv_iou = torch.stack([iou_tv(b1, b2) for b1, b2 in zip(boxes1, boxes2)])
     else:
-        tv_iou = tv_generalized_box_iou(boxes1, boxes2)
+        tv_iou = iou_tv(boxes1, boxes2)
 
-    tfbo_iou = tfbo_generalized_box_iou(boxes1, boxes2)
+    tfbo_iou = iou_tfbo(boxes1, boxes2)
 
     if dtype == torch.float16:
         # Torchvision's box_iou has issues with float16 precision
@@ -120,6 +127,40 @@ def test_box_giou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tu
         torch.testing.assert_close(tfbo_iou, tv_iou, equal_nan=True)
     else:
         torch.testing.assert_close(tfbo_iou, tv_iou)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("num_batch", [1, 4])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
+)
+@pytest.mark.parametrize("num_boxes", [(10, 12), (31, 32), (91, 318)])
+def test_box_giou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tuple):
+    run_box_iou_test(
+        device,
+        num_batch,
+        dtype,
+        num_boxes,
+        tfbo_generalized_box_iou,
+        tv_generalized_box_iou,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("num_batch", [1, 4])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
+)
+@pytest.mark.parametrize("num_boxes", [(10, 12), (31, 32), (91, 318)])
+def test_box_diou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tuple):
+    run_box_iou_test(
+        device,
+        num_batch,
+        dtype,
+        num_boxes,
+        tfbo_distance_box_iou,
+        tv_distance_box_iou,
+    )
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -177,7 +218,18 @@ def test_loss_giou(device: str):
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_loss_giou_backward(device: str):
+def test_loss_diou(device: str):
+    boxes1, boxes2 = make_random_box_pairs(
+        "xyxy", 10, dtype=torch.float32, device=device, normalized=True
+    )
+
+    tv_diou = tv_distance_box_iou_loss(boxes1, boxes2)
+    tfbo_diou = tfbo_distance_box_iou_loss(boxes1, boxes2)
+
+    torch.testing.assert_close(tfbo_diou, tv_diou)
+
+
+def _test_backward_box_iou(tfbo_fn: IouFn, tv_fn: IouFn, device: torch.device):
     boxes1_tfbo, boxes2_tfbo = make_random_box_pairs(
         "xyxy", 1000, dtype=torch.float32, device=device, normalized=True
     )
@@ -190,8 +242,8 @@ def test_loss_giou_backward(device: str):
     boxes1_tv.requires_grad = True
     boxes2_tv.requires_grad = True
 
-    tv_giou = tv_generalized_box_iou_loss(boxes1_tv, boxes2_tv)
-    tfbo_giou = tfbo_generalized_box_iou_loss(boxes1_tfbo, boxes2_tfbo)
+    tv_giou = tv_fn(boxes1_tv, boxes2_tv)
+    tfbo_giou = tfbo_fn(boxes1_tfbo, boxes2_tfbo)
 
     torch.testing.assert_close(tfbo_giou, tv_giou, rtol=1e-5, atol=2e-5)
 
@@ -202,3 +254,15 @@ def test_loss_giou_backward(device: str):
     # Check gradients
     torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad)
     torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad)
+
+
+@pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+def test_loss_giou_backward(device: torch.device):
+    _test_backward_box_iou(
+        tfbo_generalized_box_iou_loss, tv_generalized_box_iou_loss, device
+    )
+
+
+@pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+def test_loss_diou_backward(device: torch.device):
+    _test_backward_box_iou(tfbo_distance_box_iou_loss, tv_distance_box_iou_loss, device)

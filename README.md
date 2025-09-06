@@ -117,7 +117,7 @@ Without autograd
 - [x] `box_iou`
 - [x] `generalized_box_iou`
 - [ ] `complete_box_iou`
-- [ ] `distance_box_iou`
+- [x] `distance_box_iou`
 
 ### Loss Operations
 
@@ -126,7 +126,7 @@ Obviously this has to have autograd
 - [x] `_loss_inter_union`
 - [x] `generalized_box_iou_loss`
 - [ ] `completed_box_iou_loss`
-- [ ] `distance_box_iou_loss`
+- [x] `distance_box_iou_loss`
 - [ ] `minimum_points_distance_loss`
 - [ ] `normalized_wasserstein_distance_loss`
 - [ ] `inner_iou_loss`
