@@ -144,6 +144,19 @@ def generalized_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
 
 
 def distance_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
+    """Compute the Distance Intersection over Union (DIoU) for two sets of bounding boxes.
+
+    Args:
+        boxes1 (Tensor): First set of M boxes in format [x1, y1, x2, y2].
+        boxes2 (Tensor): Second set of N boxes in format [x1, y1, x2, y2].
+
+    Returns:
+        Tensor: [M, N] DIoU values for each pair of boxes.
+    """
+    return torch.ops.box_ops.distance_box_iou(boxes1.contiguous(), boxes2.contiguous())
+
+
+def complete_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     """Compute the Complete Intersection over Union (CIoU) for two sets of bounding boxes.
 
     Args:
@@ -153,7 +166,7 @@ def distance_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     Returns:
         Tensor: [M, N] CIoU values for each pair of boxes.
     """
-    return torch.ops.box_ops.distance_box_iou(boxes1.contiguous(), boxes2.contiguous())
+    return torch.ops.box_ops.complete_box_iou(boxes1.contiguous(), boxes2.contiguous())
 
 
 def _box_iou_loss_context(

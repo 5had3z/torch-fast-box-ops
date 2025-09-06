@@ -8,6 +8,7 @@ from torchvision.ops.boxes import (
     box_iou as tv_box_iou,
     generalized_box_iou as tv_generalized_box_iou,
     distance_box_iou as tv_distance_box_iou,
+    complete_box_iou as tv_complete_box_iou,
 )
 from torchvision.ops.giou_loss import (
     generalized_box_iou_loss as tv_generalized_box_iou_loss,
@@ -22,6 +23,7 @@ from torch_fast_box_ops import (
     generalized_box_iou_loss as tfbo_generalized_box_iou_loss,
     distance_box_iou as tfbo_distance_box_iou,
     distance_box_iou_loss as tfbo_distance_box_iou_loss,
+    complete_box_iou as tfbo_complete_box_iou,
 )
 
 from utils import make_random_boxes, make_random_box_pairs
@@ -160,6 +162,23 @@ def test_box_diou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tu
         num_boxes,
         tfbo_distance_box_iou,
         tv_distance_box_iou,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("num_batch", [1, 4])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
+)
+@pytest.mark.parametrize("num_boxes", [(10, 12), (31, 32), (91, 318)])
+def test_box_ciou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tuple):
+    run_box_iou_test(
+        device,
+        num_batch,
+        dtype,
+        num_boxes,
+        tfbo_complete_box_iou,
+        tv_complete_box_iou,
     )
 
 
