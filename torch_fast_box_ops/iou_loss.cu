@@ -314,6 +314,84 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
     return { grad_box1, grad_box2 };
 }
 
+
+template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps, ciou_tag) -> T
+{
+    const auto diou_loss = iou_loss_fn(box1, box2, eps, diou_tag{});
+    const auto intersection = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    const auto iou = intersection / union_area;
+
+    const auto aspect =
+        std::atan(box1.width() / (box1.height() + eps)) - std::atan(box2.width() / (box2.height() + eps));
+    const auto v = 4 / (M_PI * M_PI) * aspect * aspect;
+    const auto alpha = v / (1 - iou + v + eps);
+    return diou_loss + alpha * v;
+}
+
+/**
+ * @brief The dL/du factor of the box point gradients if we take v=4/(pi^2) * (u)^2
+ *        where u=arctan(w1/h1) - arctan(w2/h2) is ratio_diff then dL/du = 4/(pi^2) * 2 * u
+ *        and then we apply this to point p's `ciou_point_grad` (p=box1.x1 etc) dL/dp=dL/du * du/dp
+ *
+ * @tparam T datatype
+ * @param alpha constant alpha term from CIoU
+ * @param ratio_diff Aspect ratio difference of two boxes arctan(w1/h1) - arctan(w2/h2)
+ * @return dL/du term
+ */
+template<typename T> TFBO_HOST_DEVICE auto ciou_ratio_grad(T alpha, T ratio_diff) -> T
+{
+    return 4 * alpha / (M_PI * M_PI) * 2 * ratio_diff;
+}
+
+/**
+ * @brief Gradient calculation for CIoU aspect ratio difference term du/dp where u=arctan(w1/h1) - arctan(w2/h2)
+ *        where p is a bounding box point (x1 or y2 etc).
+ *
+ * @note The signed-ness of this gradient depends on the box and corner. Where box1.x1 -ve, box1.y1 +ve and the
+ *       inverse for bottom corner. Inverse this logic again again for box 2.
+ *
+ * @tparam T datatype
+ * @param a The side length of the target dimension (width for x coords, height for ycoords)
+ * @param b The other side's length
+ * @return du/dp term
+ */
+template<typename T> TFBO_HOST_DEVICE auto ciou_point_grad(T a, T b) -> T { return b / (a * a + b * b); }
+
+
+template<typename T>
+TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, ciou_tag)
+    -> std::tuple<XYXY<T>, XYXY<T>>
+{
+    const auto intersection = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    const auto iou = intersection / union_area;
+
+    const T aspect_diff =
+        std::atan(box1.width() / (box1.height() + eps)) - std::atan(box2.width() / (box2.height() + eps));
+    const T v = 4 / (M_PI * M_PI) * aspect_diff * aspect_diff;
+    const T alpha = v / (1 - iou + v + eps);
+
+    auto [box1grad, box2grad] = iou_grad(grad_loss, box1, box2, eps, diou_tag{});
+
+    const auto ratio_grad = grad_loss * ciou_ratio_grad(alpha, aspect_diff);
+    const auto box1_x_grad = ciou_point_grad(box1.width(), box1.height());
+    const auto box1_y_grad = ciou_point_grad(box1.height(), box1.width());
+    box1grad.x1 = fma(ratio_grad, -box1_x_grad, box1grad.x1);
+    box1grad.y1 = fma(ratio_grad, box1_y_grad, box1grad.y1);
+    box1grad.x2 = fma(ratio_grad, box1_x_grad, box1grad.x2);
+    box1grad.y2 = fma(ratio_grad, -box1_y_grad, box1grad.y2);
+
+    const auto box2_x_grad = ciou_point_grad(box2.width(), box2.height());
+    const auto box2_y_grad = ciou_point_grad(box2.height(), box2.width());
+    box2grad.x1 = fma(ratio_grad, box2_x_grad, box2grad.x1);
+    box2grad.y1 = fma(ratio_grad, -box2_y_grad, box2grad.y1);
+    box2grad.x2 = fma(ratio_grad, -box2_x_grad, box2grad.x2);
+    box2grad.y2 = fma(ratio_grad, box2_y_grad, box2grad.y2);
+
+    return { box1grad, box2grad };
+}
+
 template<typename IoUType>
 auto box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor
 {
@@ -427,18 +505,28 @@ TORCH_LIBRARY_IMPL(box_ops, CPU, m)
 {
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
+
     m.impl("generalized_box_iou_loss", &box_iou_loss<giou_tag>);
     m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
+
     m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
     m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
+
+    m.impl("complete_box_iou_loss", &box_iou_loss<ciou_tag>);
+    m.impl("complete_box_iou_loss_backward", &box_iou_loss_backward<ciou_tag>);
 }
 
 TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
 {
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
+
     m.impl("generalized_box_iou_loss", &box_iou_loss<giou_tag>);
     m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
+
     m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
     m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
+
+    m.impl("complete_box_iou_loss", &box_iou_loss<ciou_tag>);
+    m.impl("complete_box_iou_loss_backward", &box_iou_loss_backward<ciou_tag>);
 }

@@ -72,19 +72,29 @@ auto TFBO_HOST_DEVICE box_iou_fn(const XYXY<In> &box1, const In area1, const XYX
 {
     const In intersection = box_intersection_area(box1, box2);
     const Out union_area = area1 + area2 - intersection;
+    const Out iou = intersection / union_area;
     if constexpr (std::is_same_v<IouType, iou_tag>) {
         return intersection / union_area;
     } else if constexpr (std::is_same_v<IouType, giou_tag>) {
         XYXY<In> enclosing_box = min_enclosing_box(box1, box2);
         Out enclosing_area = std::max(box_area_op(enclosing_box), static_cast<In>(0));
-        return intersection / union_area - (enclosing_area - union_area) / enclosing_area;
-    } else if constexpr (std::is_same_v<IouType, diou_tag>) {
+        return iou - (enclosing_area - union_area) / enclosing_area;
+    } else if constexpr (std::is_same_v<IouType, diou_tag> || std::is_same_v<IouType, ciou_tag>) {
         XYXY<In> enclosing_box = min_enclosing_box(box1, box2);
         const Out diag_dist_sq = dist_sq<Out>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
         const CXCY<Out> box1c(box1);
         const CXCY<Out> box2c(box2);
         const Out cent_dist_sq = dist_sq<Out>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
-        return intersection / union_area - cent_dist_sq / (diag_dist_sq + static_cast<Out>(1e-7));
+        const auto diou = iou - cent_dist_sq / (diag_dist_sq + static_cast<Out>(1e-7));
+        if constexpr (std::is_same_v<IouType, diou_tag>) {
+            return diou;
+        } else {
+            const auto aspect =
+                std::atan(box1.width() / (box1.height() + 1e-7)) - std::atan(box2.width() / (box2.height() + 1e-7));
+            const auto v = (4 / (M_PI * M_PI)) * aspect * aspect;
+            const auto alpha = v / (1 - iou + v + 1e-7);
+            return diou - alpha * v;
+        }
     }
 }
 
@@ -204,7 +214,7 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
     });
 }
 
-auto regularize_for_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2, const torch::Tensor &output)
+auto regularize_shape_for_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2, const torch::Tensor &output)
     -> std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 {
     torch::Tensor boxes1_flat, boxes2_flat, output_flat;
@@ -247,7 +257,7 @@ template<typename IouType> auto box_iou(const torch::Tensor &boxes1, const torch
 
     // Regularize the shape to Batch x Nboxes x 4
     torch::Tensor boxes1_flat, boxes2_flat, output_flat;
-    std::tie(boxes1_flat, boxes2_flat, output_flat) = regularize_for_iou(boxes1, boxes2, output);
+    std::tie(boxes1_flat, boxes2_flat, output_flat) = regularize_shape_for_iou(boxes1, boxes2, output);
 
     if (boxes1_flat.is_cuda()) {
         box_iou_gpu_impl<IouType>(boxes1_flat, boxes2_flat, output_flat);
@@ -265,6 +275,8 @@ TORCH_LIBRARY_IMPL(box_ops, CPU, m)
     m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("generalized_box_iou", &box_iou<giou_tag>);
     m.impl("distance_box_iou", &box_iou<diou_tag>);
+    m.impl("complete_box_iou", &box_iou<ciou_tag>);
+
     m.impl("box_area_backward", &box_area_backward);
 }
 
@@ -274,5 +286,7 @@ TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
     m.impl("box_iou", &box_iou<iou_tag>);
     m.impl("generalized_box_iou", &box_iou<giou_tag>);
     m.impl("distance_box_iou", &box_iou<diou_tag>);
+    m.impl("complete_box_iou", &box_iou<ciou_tag>);
+
     m.impl("box_area_backward", &box_area_backward);
 }

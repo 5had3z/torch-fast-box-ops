@@ -2,13 +2,11 @@ import pytest
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+from torchvision.ops import complete_box_iou_loss, generalized_box_iou_loss
 from torchvision.ops.boxes import box_convert as tv_box_convert
-from torchvision.ops import generalized_box_iou_loss, complete_box_iou_loss
+from utils import make_random_boxes
 
 from torch_fast_box_ops import box_convert as tfbo_box_convert
-
-
-from utils import make_random_boxes
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

@@ -144,6 +144,19 @@ def generalized_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
 
 
 def distance_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
+    """Compute the Distance Intersection over Union (DIoU) for two sets of bounding boxes.
+
+    Args:
+        boxes1 (Tensor): First set of M boxes in format [x1, y1, x2, y2].
+        boxes2 (Tensor): Second set of N boxes in format [x1, y1, x2, y2].
+
+    Returns:
+        Tensor: [M, N] DIoU values for each pair of boxes.
+    """
+    return torch.ops.box_ops.distance_box_iou(boxes1.contiguous(), boxes2.contiguous())
+
+
+def complete_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     """Compute the Complete Intersection over Union (CIoU) for two sets of bounding boxes.
 
     Args:
@@ -153,7 +166,7 @@ def distance_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     Returns:
         Tensor: [M, N] CIoU values for each pair of boxes.
     """
-    return torch.ops.box_ops.distance_box_iou(boxes1.contiguous(), boxes2.contiguous())
+    return torch.ops.box_ops.complete_box_iou(boxes1.contiguous(), boxes2.contiguous())
 
 
 def _box_iou_loss_context(
@@ -248,6 +261,57 @@ def distance_box_iou_loss(
         Tensor: Loss values with the specified reduction applied.
     """
     loss: Tensor = torch.ops.box_ops.distance_box_iou_loss(
+        boxes1.contiguous(), boxes2.contiguous(), eps
+    )
+
+    # Check reduction option and return loss accordingly
+    if reduction == "none":
+        pass
+    elif reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+    elif reduction == "sum":
+        loss = loss.sum()
+    else:
+        raise ValueError(
+            f"Invalid Value for arg 'reduction': '{reduction} \n "
+            "Supported reduction modes: 'none', 'mean', 'sum'"
+        )
+    return loss
+
+
+def _complete_box_iou_loss_backward(ctx, grad: Tensor):
+    boxes1: Tensor
+    boxes2: Tensor
+    (boxes1, boxes2) = ctx.saved_tensors
+    grad_boxes1, grad_boxes2 = torch.ops.box_ops.complete_box_iou_loss_backward(
+        grad.contiguous(), boxes1.contiguous(), boxes2.contiguous(), ctx.eps
+    )
+    return grad_boxes1, grad_boxes2, None
+
+
+torch.library.register_autograd(
+    "box_ops::complete_box_iou_loss",
+    _complete_box_iou_loss_backward,
+    setup_context=_box_iou_loss_context,
+)
+
+
+def complete_box_iou_loss(
+    boxes1: Tensor, boxes2: Tensor, reduction: str = "none", eps: float = 1e-7
+) -> Tensor:
+    """
+    Compute the Complete IoU loss for two sets of bounding boxes.
+
+    Args:
+        boxes1 (Tensor): First set of boxes in format [x1, y1, x2, y2].
+        boxes2 (Tensor): Second set of boxes in format [x1, y1, x2, y2].
+        reduction (str): Reduction method ('none', 'mean', 'sum').
+        eps (float): Small value to prevent division by zero.
+
+    Returns:
+        Tensor: Loss values with the specified reduction applied.
+    """
+    loss: Tensor = torch.ops.box_ops.complete_box_iou_loss(
         boxes1.contiguous(), boxes2.contiguous(), eps
     )
 

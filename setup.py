@@ -2,7 +2,7 @@
 """Compile the C++ and CUDA extensions for torch_fast_box_ops."""
 from pathlib import Path
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 if __name__ == "__main__":

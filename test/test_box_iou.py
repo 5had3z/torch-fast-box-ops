@@ -3,28 +3,28 @@ from typing import Callable
 import pytest
 import torch
 from torch.nn import functional as F
-from torchvision.ops.boxes import (
-    box_area as tv_box_area,
-    box_iou as tv_box_iou,
-    generalized_box_iou as tv_generalized_box_iou,
-    distance_box_iou as tv_distance_box_iou,
-)
+from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
+from torchvision.ops.boxes import box_area as tv_box_area
+from torchvision.ops.boxes import box_iou as tv_box_iou
+from torchvision.ops.boxes import complete_box_iou as tv_complete_box_iou
+from torchvision.ops.boxes import distance_box_iou as tv_distance_box_iou
+from torchvision.ops.boxes import generalized_box_iou as tv_generalized_box_iou
+from torchvision.ops.ciou_loss import complete_box_iou_loss as tv_complete_box_iou_loss
+from torchvision.ops.diou_loss import distance_box_iou_loss as tv_distance_box_iou_loss
 from torchvision.ops.giou_loss import (
     generalized_box_iou_loss as tv_generalized_box_iou_loss,
 )
-from torchvision.ops.diou_loss import distance_box_iou_loss as tv_distance_box_iou_loss
-from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
-from torch_fast_box_ops import (
-    box_area as tfbo_box_area,
-    box_iou as tfbo_box_iou,
-    _loss_inter_union as tfbo_loss_inter_union,
-    generalized_box_iou as tfbo_generalized_box_iou,
-    generalized_box_iou_loss as tfbo_generalized_box_iou_loss,
-    distance_box_iou as tfbo_distance_box_iou,
-    distance_box_iou_loss as tfbo_distance_box_iou_loss,
-)
+from utils import make_random_box_pairs, make_random_boxes
 
-from utils import make_random_boxes, make_random_box_pairs
+from torch_fast_box_ops import _loss_inter_union as tfbo_loss_inter_union
+from torch_fast_box_ops import box_area as tfbo_box_area
+from torch_fast_box_ops import box_iou as tfbo_box_iou
+from torch_fast_box_ops import complete_box_iou as tfbo_complete_box_iou
+from torch_fast_box_ops import complete_box_iou_loss as tfbo_complete_box_iou_loss
+from torch_fast_box_ops import distance_box_iou as tfbo_distance_box_iou
+from torch_fast_box_ops import distance_box_iou_loss as tfbo_distance_box_iou_loss
+from torch_fast_box_ops import generalized_box_iou as tfbo_generalized_box_iou
+from torch_fast_box_ops import generalized_box_iou_loss as tfbo_generalized_box_iou_loss
 
 IouFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
@@ -164,6 +164,23 @@ def test_box_diou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tu
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("num_batch", [1, 4])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
+)
+@pytest.mark.parametrize("num_boxes", [(10, 12), (31, 32), (91, 318)])
+def test_box_ciou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tuple):
+    run_box_iou_test(
+        device,
+        num_batch,
+        dtype,
+        num_boxes,
+        tfbo_complete_box_iou,
+        tv_complete_box_iou,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_loss_inter_union(device: str):
     boxes1, boxes2 = make_random_box_pairs(
         "xyxy", 10, dtype=torch.float32, device=device, normalized=True
@@ -266,3 +283,8 @@ def test_loss_giou_backward(device: torch.device):
 @pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda")])
 def test_loss_diou_backward(device: torch.device):
     _test_backward_box_iou(tfbo_distance_box_iou_loss, tv_distance_box_iou_loss, device)
+
+
+@pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+def test_loss_ciou_backward(device: torch.device):
+    _test_backward_box_iou(tfbo_complete_box_iou_loss, tv_complete_box_iou_loss, device)

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "boxes.cuh"
-#include "kernel.cuh"
 
 struct iou_type_tag
 {
