@@ -330,15 +330,22 @@ template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, cons
 }
 
 /**
- * @brief Negative for x11
+ * @brief Gradient calculation for CIoU value term.
+ *
+ * @note Box 1 x1 -ve, y1 +ve, inverse for bottom corner. Inverse again for box 2.
  *
  * @tparam T
- * @param p1
- * @param p2
- * @param l
- * @return T
+ * @param a the side length of the target dimension (width for x coords, height for ycoords)
+ * @param b the other side length
+ * @return T gradient of point
  */
-template<typename T> TFBO_HOST_DEVICE auto ciou_value_x_grad(T w, T h) -> T { return w / (w * w + h * h); }
+template<typename T> TFBO_HOST_DEVICE auto ciou_value_grad(T a, T b) -> T { return a / (a * a + b * b); }
+
+template<typename T> TFBO_HOST_DEVICE auto ciou_value_scale(T alpha, T ratio_diff) -> T
+{
+    return 4 * alpha / (M_PI * M_PI) * 2 * ratio_diff * ratio_diff;
+}
+
 
 template<typename T>
 TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, ciou_tag)
@@ -348,12 +355,27 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
     const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
     const auto iou = intersection / union_area;
 
-    const auto aspect =
+    const T aspect_diff =
         std::atan(box1.width() / (box1.height() + eps)) - std::atan(box2.width() / (box2.height() + eps));
-    const auto v = 4 / (M_PI * M_PI) * aspect * aspect;
-    const auto alpha = v / (1 - iou + v + eps);
+    const T v = 4 / (M_PI * M_PI) * aspect_diff * aspect_diff;
+    const T alpha = v / (1 - iou + v + eps);
 
     auto [box1grad, box2grad] = iou_grad(grad_loss, box1, box2, eps, diou_tag{});
+
+    const auto value_grad = grad_loss * ciou_value_scale(alpha, aspect_diff);
+    const auto box1_w_grad = ciou_value_grad(box1.width(), box1.height());
+    const auto box1_h_grad = ciou_value_grad(box1.height(), box1.width());
+    box1grad.x1 = fma(value_grad, -box1_w_grad, box1grad.x1);
+    box1grad.y1 = fma(value_grad, box1_h_grad, box1grad.y1);
+    box1grad.x2 = fma(value_grad, box1_w_grad, box1grad.x2);
+    box1grad.y2 = fma(value_grad, -box1_h_grad, box1grad.y2);
+
+    const auto box2_w_grad = ciou_value_grad(box2.width(), box2.height());
+    const auto box2_h_grad = ciou_value_grad(box2.height(), box2.width());
+    box2grad.x1 = fma(value_grad, -box2_w_grad, box2grad.x1);
+    box2grad.y1 = fma(value_grad, box2_h_grad, box2grad.y1);
+    box2grad.x2 = fma(value_grad, box2_w_grad, box2grad.x2);
+    box2grad.y2 = fma(value_grad, -box2_h_grad, box2grad.y2);
 
     return { box1grad, box2grad };
 }
@@ -471,10 +493,13 @@ TORCH_LIBRARY_IMPL(box_ops, CPU, m)
 {
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
+
     m.impl("generalized_box_iou_loss", &box_iou_loss<giou_tag>);
     m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
+
     m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
     m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
+
     m.impl("complete_box_iou_loss", &box_iou_loss<ciou_tag>);
     m.impl("complete_box_iou_loss_backward", &box_iou_loss_backward<ciou_tag>);
 }
@@ -483,10 +508,13 @@ TORCH_LIBRARY_IMPL(box_ops, CUDA, m)
 {
     m.impl("_loss_inter_union", &loss_inter_union);
     m.impl("_loss_inter_union_backward", &loss_inter_union_backward);
+
     m.impl("generalized_box_iou_loss", &box_iou_loss<giou_tag>);
     m.impl("generalized_box_iou_loss_backward", &box_iou_loss_backward<giou_tag>);
+
     m.impl("distance_box_iou_loss", &box_iou_loss<diou_tag>);
     m.impl("distance_box_iou_loss_backward", &box_iou_loss_backward<diou_tag>);
+
     m.impl("complete_box_iou_loss", &box_iou_loss<ciou_tag>);
     m.impl("complete_box_iou_loss_backward", &box_iou_loss_backward<ciou_tag>);
 }
