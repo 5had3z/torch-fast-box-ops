@@ -9,6 +9,7 @@ import torch
 from torchvision.ops._utils import _loss_inter_union as tv_loss_inter_union
 from torchvision.ops.boxes import box_area as tv_box_area
 from torchvision.ops.boxes import box_iou as tv_box_iou
+from torchvision.ops.ciou_loss import complete_box_iou_loss as tv_complete_box_iou_loss
 from torchvision.ops.diou_loss import distance_box_iou_loss as tv_distance_box_iou_loss
 from torchvision.ops.giou_loss import (
     generalized_box_iou_loss as tv_generalized_box_iou_loss,
@@ -17,6 +18,7 @@ from torchvision.ops.giou_loss import (
 from torch_fast_box_ops import _loss_inter_union as tfbo_loss_inter_union
 from torch_fast_box_ops import box_area as tfbo_box_area
 from torch_fast_box_ops import box_iou as tfbo_box_iou
+from torch_fast_box_ops import complete_box_iou_loss as tfbo_complete_box_iou_loss
 from torch_fast_box_ops import distance_box_iou_loss as tfbo_distance_box_iou_loss
 from torch_fast_box_ops import generalized_box_iou_loss as tfbo_generalized_box_iou_loss
 
@@ -140,10 +142,13 @@ def benchmark_box_iou_loss(
     tfbo_fn = {
         "giou": tfbo_generalized_box_iou_loss,
         "diou": tfbo_distance_box_iou_loss,
+        "ciou": tfbo_complete_box_iou_loss,
     }[iou_type]
-    tv_fn = {"giou": tv_generalized_box_iou_loss, "diou": tv_distance_box_iou_loss}[
-        iou_type
-    ]
+    tv_fn = {
+        "giou": tv_generalized_box_iou_loss,
+        "diou": tv_distance_box_iou_loss,
+        "ciou": tv_complete_box_iou_loss,
+    }[iou_type]
 
     # Warm-up
     _ = tfbo_fn(boxes1, boxes2)
@@ -214,6 +219,13 @@ def run_benchmarks():
         no_int32_dtypes,
         "Distance Box IoU Loss",
         functools.partial(benchmark_box_iou_loss, iou_type="diou"),
+    )
+
+    run_benchmark(
+        devices,
+        no_int32_dtypes,
+        "Complete Box IoU Loss",
+        functools.partial(benchmark_box_iou_loss, iou_type="ciou"),
     )
 
 

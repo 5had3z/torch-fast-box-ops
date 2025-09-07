@@ -330,21 +330,33 @@ template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, cons
 }
 
 /**
- * @brief Gradient calculation for CIoU value term.
+ * @brief The dL/du factor of the box point gradients if we take v=4/(pi^2) * (u)^2
+ *        where u=arctan(w1/h1) - arctan(w2/h2) is ratio_diff then dL/du = 4/(pi^2) * 2 * u
+ *        and then we apply this to point p's `ciou_point_grad` (p=box1.x1 etc) dL/dp=dL/du * du/dp
  *
- * @note Box 1 x1 -ve, y1 +ve, inverse for bottom corner. Inverse again for box 2.
- *
- * @tparam T
- * @param a the side length of the target dimension (width for x coords, height for ycoords)
- * @param b the other side length
- * @return T gradient of point
+ * @tparam T datatype
+ * @param alpha constant alpha term from CIoU
+ * @param ratio_diff Aspect ratio difference of two boxes arctan(w1/h1) - arctan(w2/h2)
+ * @return dL/du term
  */
-template<typename T> TFBO_HOST_DEVICE auto ciou_value_grad(T a, T b) -> T { return a / (a * a + b * b); }
-
-template<typename T> TFBO_HOST_DEVICE auto ciou_value_scale(T alpha, T ratio_diff) -> T
+template<typename T> TFBO_HOST_DEVICE auto ciou_ratio_grad(T alpha, T ratio_diff) -> T
 {
-    return 4 * alpha / (M_PI * M_PI) * 2 * ratio_diff * ratio_diff;
+    return 4 * alpha / (M_PI * M_PI) * 2 * ratio_diff;
 }
+
+/**
+ * @brief Gradient calculation for CIoU aspect ratio difference term du/dp where u=arctan(w1/h1) - arctan(w2/h2)
+ *        where p is a bounding box point (x1 or y2 etc).
+ *
+ * @note The signed-ness of this gradient depends on the box and corner. Where box1.x1 -ve, box1.y1 +ve and the
+ *       inverse for bottom corner. Inverse this logic again again for box 2.
+ *
+ * @tparam T datatype
+ * @param a The side length of the target dimension (width for x coords, height for ycoords)
+ * @param b The other side's length
+ * @return du/dp term
+ */
+template<typename T> TFBO_HOST_DEVICE auto ciou_point_grad(T a, T b) -> T { return b / (a * a + b * b); }
 
 
 template<typename T>
@@ -362,20 +374,20 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
 
     auto [box1grad, box2grad] = iou_grad(grad_loss, box1, box2, eps, diou_tag{});
 
-    const auto value_grad = grad_loss * ciou_value_scale(alpha, aspect_diff);
-    const auto box1_w_grad = ciou_value_grad(box1.width(), box1.height());
-    const auto box1_h_grad = ciou_value_grad(box1.height(), box1.width());
-    box1grad.x1 = fma(value_grad, -box1_w_grad, box1grad.x1);
-    box1grad.y1 = fma(value_grad, box1_h_grad, box1grad.y1);
-    box1grad.x2 = fma(value_grad, box1_w_grad, box1grad.x2);
-    box1grad.y2 = fma(value_grad, -box1_h_grad, box1grad.y2);
+    const auto ratio_grad = grad_loss * ciou_ratio_grad(alpha, aspect_diff);
+    const auto box1_x_grad = ciou_point_grad(box1.width(), box1.height());
+    const auto box1_y_grad = ciou_point_grad(box1.height(), box1.width());
+    box1grad.x1 = fma(ratio_grad, -box1_x_grad, box1grad.x1);
+    box1grad.y1 = fma(ratio_grad, box1_y_grad, box1grad.y1);
+    box1grad.x2 = fma(ratio_grad, box1_x_grad, box1grad.x2);
+    box1grad.y2 = fma(ratio_grad, -box1_y_grad, box1grad.y2);
 
-    const auto box2_w_grad = ciou_value_grad(box2.width(), box2.height());
-    const auto box2_h_grad = ciou_value_grad(box2.height(), box2.width());
-    box2grad.x1 = fma(value_grad, -box2_w_grad, box2grad.x1);
-    box2grad.y1 = fma(value_grad, box2_h_grad, box2grad.y1);
-    box2grad.x2 = fma(value_grad, box2_w_grad, box2grad.x2);
-    box2grad.y2 = fma(value_grad, -box2_h_grad, box2grad.y2);
+    const auto box2_x_grad = ciou_point_grad(box2.width(), box2.height());
+    const auto box2_y_grad = ciou_point_grad(box2.height(), box2.width());
+    box2grad.x1 = fma(ratio_grad, box2_x_grad, box2grad.x1);
+    box2grad.y1 = fma(ratio_grad, -box2_y_grad, box2grad.y1);
+    box2grad.x2 = fma(ratio_grad, -box2_x_grad, box2grad.x2);
+    box2grad.y2 = fma(ratio_grad, box2_y_grad, box2grad.y2);
 
     return { box1grad, box2grad };
 }
