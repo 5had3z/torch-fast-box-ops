@@ -50,9 +50,7 @@ def _box_area_context(ctx, inputs: tuple[Tensor, str, str], output: Tensor):
 def _box_area_backward(ctx, grad: Tensor):
     boxes: Tensor
     (boxes,) = ctx.saved_tensors
-    grad_input = torch.ops.box_ops.box_area_backward(
-        grad.contiguous(), boxes.contiguous()
-    )
+    grad_input = torch.ops.box_ops.box_area_backward(grad, boxes)
     return grad_input
 
 
@@ -71,7 +69,7 @@ def box_area(boxes: Tensor) -> Tensor:
     Returns:
         Tensor: Areas of the bounding boxes.
     """
-    return torch.ops.box_ops.box_area(boxes.contiguous())
+    return torch.ops.box_ops.box_area(boxes)
 
 
 def _loss_inter_union_context(ctx, inputs: tuple[Tensor, Tensor], output: Tensor):
@@ -84,10 +82,7 @@ def _loss_inter_union_backward(ctx, grad_inter: Tensor, grad_union: Tensor):
     boxes2: Tensor
     (boxes1, boxes2) = ctx.saved_tensors
     grad_box1, grad_box2 = torch.ops.box_ops._loss_inter_union_backward(
-        grad_inter.contiguous(),
-        grad_union.contiguous(),
-        boxes1.contiguous(),
-        boxes2.contiguous(),
+        grad_inter, grad_union, boxes1, boxes2
     )
     return grad_box1, grad_box2
 
@@ -110,7 +105,7 @@ def _loss_inter_union(boxes1: Tensor, boxes2: Tensor) -> tuple[Tensor, Tensor]:
     Returns:
         tuple: Intersection and union areas.
     """
-    return torch.ops.box_ops._loss_inter_union(boxes1.contiguous(), boxes2.contiguous())
+    return torch.ops.box_ops._loss_inter_union(boxes1, boxes2)
 
 
 def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
@@ -124,7 +119,7 @@ def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     Returns:
         Tensor: [M, N] IoU values for each pair of boxes.
     """
-    return torch.ops.box_ops.box_iou(boxes1.contiguous(), boxes2.contiguous())
+    return torch.ops.box_ops.box_iou(boxes1, boxes2)
 
 
 def generalized_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
@@ -138,9 +133,7 @@ def generalized_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     Returns:
         Tensor: [M, N] GIoU values for each pair of boxes.
     """
-    return torch.ops.box_ops.generalized_box_iou(
-        boxes1.contiguous(), boxes2.contiguous()
-    )
+    return torch.ops.box_ops.generalized_box_iou(boxes1, boxes2)
 
 
 def distance_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
@@ -153,7 +146,7 @@ def distance_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     Returns:
         Tensor: [M, N] DIoU values for each pair of boxes.
     """
-    return torch.ops.box_ops.distance_box_iou(boxes1.contiguous(), boxes2.contiguous())
+    return torch.ops.box_ops.distance_box_iou(boxes1, boxes2)
 
 
 def complete_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
@@ -166,7 +159,7 @@ def complete_box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     Returns:
         Tensor: [M, N] CIoU values for each pair of boxes.
     """
-    return torch.ops.box_ops.complete_box_iou(boxes1.contiguous(), boxes2.contiguous())
+    return torch.ops.box_ops.complete_box_iou(boxes1, boxes2)
 
 
 def _box_iou_loss_context(
@@ -182,7 +175,7 @@ def _generalized_box_iou_loss_backward(ctx, grad: Tensor):
     boxes2: Tensor
     (boxes1, boxes2) = ctx.saved_tensors
     grad_boxes1, grad_boxes2 = torch.ops.box_ops.generalized_box_iou_loss_backward(
-        grad.contiguous(), boxes1.contiguous(), boxes2.contiguous(), ctx.eps
+        grad, boxes1, boxes2, ctx.eps
     )
     return grad_boxes1, grad_boxes2, None
 
@@ -209,9 +202,7 @@ def generalized_box_iou_loss(
     Returns:
         Tensor: Loss values with the specified reduction applied.
     """
-    loss: Tensor = torch.ops.box_ops.generalized_box_iou_loss(
-        boxes1.contiguous(), boxes2.contiguous(), eps
-    )
+    loss: Tensor = torch.ops.box_ops.generalized_box_iou_loss(boxes1, boxes2, eps)
 
     # Check reduction option and return loss accordingly
     if reduction == "none":
@@ -233,7 +224,7 @@ def _distance_box_iou_loss_backward(ctx, grad: Tensor):
     boxes2: Tensor
     (boxes1, boxes2) = ctx.saved_tensors
     grad_boxes1, grad_boxes2 = torch.ops.box_ops.distance_box_iou_loss_backward(
-        grad.contiguous(), boxes1.contiguous(), boxes2.contiguous(), ctx.eps
+        grad, boxes1, boxes2, ctx.eps
     )
     return grad_boxes1, grad_boxes2, None
 
@@ -260,9 +251,7 @@ def distance_box_iou_loss(
     Returns:
         Tensor: Loss values with the specified reduction applied.
     """
-    loss: Tensor = torch.ops.box_ops.distance_box_iou_loss(
-        boxes1.contiguous(), boxes2.contiguous(), eps
-    )
+    loss: Tensor = torch.ops.box_ops.distance_box_iou_loss(boxes1, boxes2, eps)
 
     # Check reduction option and return loss accordingly
     if reduction == "none":
@@ -284,7 +273,7 @@ def _complete_box_iou_loss_backward(ctx, grad: Tensor):
     boxes2: Tensor
     (boxes1, boxes2) = ctx.saved_tensors
     grad_boxes1, grad_boxes2 = torch.ops.box_ops.complete_box_iou_loss_backward(
-        grad.contiguous(), boxes1.contiguous(), boxes2.contiguous(), ctx.eps
+        grad, boxes1, boxes2, ctx.eps
     )
     return grad_boxes1, grad_boxes2, None
 
@@ -311,9 +300,7 @@ def complete_box_iou_loss(
     Returns:
         Tensor: Loss values with the specified reduction applied.
     """
-    loss: Tensor = torch.ops.box_ops.complete_box_iou_loss(
-        boxes1.contiguous(), boxes2.contiguous(), eps
-    )
+    loss: Tensor = torch.ops.box_ops.complete_box_iou_loss(boxes1, boxes2, eps)
 
     # Check reduction option and return loss accordingly
     if reduction == "none":

@@ -180,6 +180,14 @@ def test_box_ciou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tu
     )
 
 
+def test_box_iou_mismatch_dtype():
+    boxes1 = make_random_boxes("xyxy", 10, dtype=torch.float16, device="cpu", seed=0)
+    boxes2 = make_random_boxes("xyxy", 10, dtype=torch.float32, device="cpu", seed=1)
+    tv_iou = tv_box_iou(boxes1, boxes2)
+    tfbo_iou = tfbo_box_iou(boxes1, boxes2)
+    torch.testing.assert_close(tfbo_iou, tv_iou)
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_loss_inter_union(device: str):
     boxes1, boxes2 = make_random_box_pairs(
@@ -288,3 +296,31 @@ def test_loss_diou_backward(device: torch.device):
 @pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda")])
 def test_loss_ciou_backward(device: torch.device):
     _test_backward_box_iou(tfbo_complete_box_iou_loss, tv_complete_box_iou_loss, device)
+
+
+def test_loss_giou_mismatch_dtypes():
+    boxes1_tfbo, boxes2_tfbo = make_random_box_pairs(
+        "xyxy", 1000, dtype=torch.float32, device="cpu", normalized=True
+    )
+    boxes1_tfbo = boxes1_tfbo.to(torch.float16)
+
+    boxes1_tv = boxes1_tfbo.clone()
+    boxes2_tv = boxes2_tfbo.clone()
+
+    boxes1_tfbo.requires_grad = True
+    boxes2_tfbo.requires_grad = True
+    boxes1_tv.requires_grad = True
+    boxes2_tv.requires_grad = True
+
+    tv_giou = tv_generalized_box_iou_loss(boxes1_tv, boxes2_tv)
+    tfbo_giou = tfbo_generalized_box_iou_loss(boxes1_tfbo, boxes2_tfbo)
+
+    torch.testing.assert_close(tfbo_giou, tv_giou, rtol=1e-5, atol=2e-5)
+
+    # Create random gradients for backward pass
+    tv_giou.mean().backward()
+    tfbo_giou.mean().backward()
+
+    # Check gradients
+    torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad)
+    torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad)

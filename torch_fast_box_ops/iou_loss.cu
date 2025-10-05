@@ -8,17 +8,19 @@
 auto loss_inter_union(const torch::Tensor &boxes1, const torch::Tensor &boxes2)
     -> std::tuple<torch::Tensor, torch::Tensor>
 {
-    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
+    const auto common_dtype = c10::promoteTypes(boxes1.scalar_type(), boxes2.scalar_type());
+    auto boxes1_c = boxes1.contiguous().to(common_dtype);
+    auto boxes2_c = boxes2.contiguous().to(common_dtype);
 
-    torch::Tensor intersection = boxes1.new_empty({ boxes1.size(0) });
-    torch::Tensor union_area = boxes1.new_empty({ boxes1.size(0) });
+    torch::Tensor intersection = boxes1_c.new_empty({ boxes1.size(0) });
+    torch::Tensor union_area = boxes1_c.new_empty({ boxes1.size(0) });
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "_loss_inter_union", [&] {
         const auto num_boxes = boxes1.size(0);
-        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
-        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1_c.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2_c.const_data_ptr());
         auto intersection_ptr = static_cast<scalar_t *>(intersection.mutable_data_ptr());
         auto union_area_ptr = static_cast<scalar_t *>(union_area.mutable_data_ptr());
 
@@ -118,23 +120,26 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
     const torch::Tensor &boxes1,
     const torch::Tensor &boxes2) -> std::tuple<torch::Tensor, torch::Tensor>
 {
-    TORCH_CHECK(
-        grad_inter.is_contiguous() && grad_union.is_contiguous() && boxes1.is_contiguous() && boxes2.is_contiguous(),
-        "Input tensors must be contiguous");
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
+    const auto common_dtype = c10::promoteTypes(c10::promoteTypes(grad_inter.scalar_type(), grad_union.scalar_type()),
+        c10::promoteTypes(boxes1.scalar_type(), boxes2.scalar_type()));
+    auto grad_inter_c = grad_inter.contiguous().to(common_dtype);
+    auto grad_union_c = grad_union.contiguous().to(common_dtype);
+    auto boxes1_c = boxes1.contiguous().to(common_dtype);
+    auto boxes2_c = boxes2.contiguous().to(common_dtype);
 
-    auto grad_boxes1 = torch::empty_like(boxes1);
-    auto grad_boxes2 = torch::empty_like(boxes2);
+    auto grad_boxes1 = torch::empty_like(boxes1_c);
+    auto grad_boxes2 = torch::empty_like(boxes2_c);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "_loss_inter_union_backward", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(common_dtype, "_loss_inter_union_backward", [&] {
         const auto num_boxes = boxes1.size(0);
-        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
-        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1_c.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2_c.const_data_ptr());
         auto grad_boxes1_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes1.mutable_data_ptr());
         auto grad_boxes2_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes2.mutable_data_ptr());
-        const auto grad_inter_ptr = grad_inter.const_data_ptr<scalar_t>();
-        const auto grad_union_ptr = grad_union.const_data_ptr<scalar_t>();
+        const auto grad_inter_ptr = grad_inter_c.const_data_ptr<scalar_t>();
+        const auto grad_union_ptr = grad_union_c.const_data_ptr<scalar_t>();
 
         if (boxes1.is_cuda()) {
             auto kernel = [=] __device__(unsigned int idx) {
@@ -395,16 +400,18 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
 template<typename IoUType>
 auto box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor
 {
-    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
+    const auto common_dtype = c10::promoteTypes(boxes1.scalar_type(), boxes2.scalar_type());
+    auto boxes1_c = boxes1.contiguous().to(common_dtype);
+    auto boxes2_c = boxes2.contiguous().to(common_dtype);
 
-    auto loss = boxes1.new_empty({ boxes1.size(0) });
+    auto loss = boxes1_c.new_empty({ boxes1.size(0) });
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "box_iou_loss", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(common_dtype, "box_iou_loss", [&] {
         const auto num_boxes = boxes1.size(0);
-        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
-        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1_c.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2_c.const_data_ptr());
         auto loss_ptr = loss.mutable_data_ptr<scalar_t>();
         const auto eps_t = static_cast<scalar_t>(eps);
 
@@ -429,21 +436,24 @@ auto box_iou_loss_backward(const torch::Tensor &grad,
     const torch::Tensor &boxes2,
     double eps) -> std::tuple<torch::Tensor, torch::Tensor>
 {
-    TORCH_CHECK(
-        grad.is_contiguous() && boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
+    auto common_dtype =
+        c10::promoteTypes(grad.scalar_type(), c10::promoteTypes(boxes1.scalar_type(), boxes2.scalar_type()));
+    auto grad_c = grad.contiguous().to(common_dtype);
+    auto boxes1_c = boxes1.contiguous().to(common_dtype);
+    auto boxes2_c = boxes2.contiguous().to(common_dtype);
 
-    auto grad_boxes1 = torch::empty_like(boxes1);
-    auto grad_boxes2 = torch::empty_like(boxes2);
+    auto grad_boxes1 = torch::empty_like(boxes1_c);
+    auto grad_boxes2 = torch::empty_like(boxes2_c);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "box_iou_loss_backward", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(common_dtype, "box_iou_loss_backward", [&] {
         const auto num_boxes = boxes1.size(0);
-        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1.const_data_ptr());
-        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2.const_data_ptr());
+        const auto boxes1_ptr = static_cast<const XYXY<scalar_t> *>(boxes1_c.const_data_ptr());
+        const auto boxes2_ptr = static_cast<const XYXY<scalar_t> *>(boxes2_c.const_data_ptr());
         auto grad_boxes1_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes1.mutable_data_ptr());
         auto grad_boxes2_ptr = static_cast<XYXY<scalar_t> *>(grad_boxes2.mutable_data_ptr());
-        const auto grad_ptr = grad.const_data_ptr<scalar_t>();
+        const auto grad_ptr = grad_c.const_data_ptr<scalar_t>();
         auto eps_t = static_cast<scalar_t>(eps);
         if (boxes1.is_cuda()) {
             auto kernel = [=] __device__(unsigned int idx) {
