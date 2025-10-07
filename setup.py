@@ -19,7 +19,7 @@ if __name__ == "__main__":
         packages=find_packages(),
         ext_modules=[
             CUDAExtension(
-                "torch_fast_box_ops._C",
+                "torch_fast_box_ops._tfbo",
                 targets,
                 extra_compile_args={
                     "cxx": ["-O3"],

@@ -37,7 +37,12 @@ static void launch_elementwise_kernel(KernelFunc lambda, size_t num_elements, cu
     int block_size = 0;
 
     // Let CUDA calculate the optimal block size
-    cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &block_size, kernel<KernelFunc>);
+    const auto err = cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &block_size, kernel<KernelFunc>);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(
+            "Failed to calculate optimal block size for kernel: " + std::string(cudaGetErrorString(err)));
+    }
+    if (block_size == 0) { throw std::runtime_error("Failed to calculate optimal block size for kernel."); }
 
     kernel<<<cuda::ceil_div(num_elements, static_cast<size_t>(block_size)), block_size, 0, stream>>>(
         lambda, num_elements);

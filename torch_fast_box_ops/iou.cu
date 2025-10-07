@@ -7,8 +7,8 @@
 
 auto box_area(const torch::Tensor &boxes) -> torch::Tensor
 {
-    TORCH_CHECK(boxes.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(boxes.size(-1) == 4, "Input tensor must have shape (..., 4) for boxes");
+    auto boxes_c = boxes.contiguous();
 
     // Output shape is the same shape as input except the last dimension
     // for compatibility with any batch or unbatched input.
@@ -17,7 +17,7 @@ auto box_area(const torch::Tensor &boxes) -> torch::Tensor
     auto output = torch::empty(output_shape, boxes.options());
 
     TFBO_DISPATCH_BOX_TYPES(boxes.scalar_type(), "box_area", [&] {
-        const auto boxes_ptr = static_cast<const XYXY<scalar_t> *>(boxes.const_data_ptr());
+        const auto boxes_ptr = static_cast<const XYXY<scalar_t> *>(boxes_c.const_data_ptr());
         const int64_t num_boxes = boxes.numel() / 4;
         auto areas_ptr = output.mutable_data_ptr<scalar_t>();
 
@@ -44,14 +44,15 @@ template<typename T> auto TFBO_HOST_DEVICE box_area_backward_(T grad, XYXY<T> bo
 
 auto box_area_backward(const torch::Tensor &grad, const torch::Tensor &boxes) -> torch::Tensor
 {
-    TORCH_CHECK(grad.is_contiguous(), "Gradient tensor must be contiguous");
-    TORCH_CHECK(boxes.is_contiguous(), "Boxes tensor must be contiguous");
     TORCH_CHECK(boxes.size(-1) == 4, "Boxes tensor must have shape (..., 4)");
+    const auto common_dtype = c10::promoteTypes(grad.scalar_type(), boxes.scalar_type());
+    auto boxes_c = boxes.contiguous().to(common_dtype);
+    auto grad_c = grad.contiguous().to(common_dtype);
 
-    auto input_grad = torch::empty_like(boxes);
-    TFBO_DISPATCH_BOX_TYPES(boxes.scalar_type(), "box_area_backward", [&] {
-        auto grad_ptr = grad.const_data_ptr<scalar_t>();
-        auto boxes_ptr = static_cast<const XYXY<scalar_t> *>(boxes.const_data_ptr());
+    auto input_grad = torch::empty_like(boxes_c);
+    TFBO_DISPATCH_BOX_TYPES(common_dtype, "box_area_backward", [&] {
+        auto grad_ptr = grad_c.const_data_ptr<scalar_t>();
+        auto boxes_ptr = static_cast<const XYXY<scalar_t> *>(boxes_c.const_data_ptr());
         auto input_grad_ptr = static_cast<XYXY<scalar_t> *>(input_grad.mutable_data_ptr());
 
         if (boxes.is_cuda()) {
@@ -74,7 +75,7 @@ auto TFBO_HOST_DEVICE box_iou_fn(const XYXY<In> &box1, const In area1, const XYX
     const Out union_area = area1 + area2 - intersection;
     const Out iou = intersection / union_area;
     if constexpr (std::is_same_v<IouType, iou_tag>) {
-        return intersection / union_area;
+        return iou;
     } else if constexpr (std::is_same_v<IouType, giou_tag>) {
         XYXY<In> enclosing_box = min_enclosing_box(box1, box2);
         Out enclosing_area = std::max(box_area_op(enclosing_box), static_cast<In>(0));
@@ -85,14 +86,14 @@ auto TFBO_HOST_DEVICE box_iou_fn(const XYXY<In> &box1, const In area1, const XYX
         const CXCY<Out> box1c(box1);
         const CXCY<Out> box2c(box2);
         const Out cent_dist_sq = dist_sq<Out>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
-        const auto diou = iou - cent_dist_sq / (diag_dist_sq + static_cast<Out>(1e-7));
+        const auto diou = iou - cent_dist_sq / (diag_dist_sq + 1e-7f);
         if constexpr (std::is_same_v<IouType, diou_tag>) {
             return diou;
         } else {
             const auto aspect =
-                std::atan(box1.width() / (box1.height() + 1e-7)) - std::atan(box2.width() / (box2.height() + 1e-7));
-            const auto v = (4 / (M_PI * M_PI)) * aspect * aspect;
-            const auto alpha = v / (1 - iou + v + 1e-7);
+                std::atan(box1.width() / (box1.height() + 1e-7f)) - std::atan(box2.width() / (box2.height() + 1e-7f));
+            const auto v = (4.f / (M_PIf * M_PIf)) * aspect * aspect;
+            const auto alpha = v / (1 - iou + v + 1e-7f);
             return diou - alpha * v;
         }
     }
@@ -200,7 +201,13 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
         if (N < box_iou_block_size_x || M < box_iou_block_size_y) {
             int min_grid_size = 0;
             int block_size = 0;
-            cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &block_size, box_iou_simple_kernel<scalar_t, IouType>);
+            const auto err = cudaOccupancyMaxPotentialBlockSize(
+                &min_grid_size, &block_size, box_iou_simple_kernel<scalar_t, IouType>);
+            if (err != cudaSuccess) {
+                throw std::runtime_error(
+                    "Failed to calculate optimal block size for kernel: " + std::string(cudaGetErrorString(err)));
+            }
+            if (block_size == 0) { throw std::runtime_error("Failed to calculate optimal block size for kernel."); }
             block_size = std::min(static_cast<int>(M * N), block_size);
             const auto grid_dim = dim3(cuda::ceil_div(M * N, static_cast<unsigned int>(block_size)), 1, B);
             box_iou_simple_kernel<scalar_t, IouType>
@@ -239,25 +246,28 @@ auto create_iou_output_tensor(const torch::Tensor &boxes1, const torch::Tensor &
     auto output_shape = boxes1.sizes().vec();
     output_shape.back() = boxes2.size(-2);// Replace '4' with the number of boxes in boxes2
     auto opts = boxes1.options();
-    if (opts.dtype() == torch::kInt32) {
-        opts = opts.dtype(torch::kFloat32);// Ensure output is float for IoU
-    }
+    opts = opts.dtype(c10::promoteTypes(boxes1.scalar_type(), boxes2.scalar_type()));
+    if (c10::isIntegralType(opts.dtype().toScalarType(), true)) { opts = opts.dtype(torch::kFloat32); }
     return torch::empty(output_shape, opts);
 }
 
 template<typename IouType> auto box_iou(const torch::Tensor &boxes1, const torch::Tensor &boxes2) -> torch::Tensor
 {
-    TORCH_CHECK(boxes1.is_contiguous() && boxes2.is_contiguous(), "Input tensors must be contiguous");
     TORCH_CHECK(boxes1.size(-1) == 4 && boxes2.size(-1) == 4, "Input tensors must have shape (..., 4) for boxes");
     TORCH_CHECK(boxes1.ndimension() == boxes2.ndimension(),
         "Input tensors boxes1 and boxes2 must have the same number of dimensions");
     TORCH_CHECK(boxes1.ndimension() >= 2, "Input tensors boxes1 and boxes2 must have at least 2 dimensions");
 
     auto output = create_iou_output_tensor(boxes1, boxes2);
+    if (output.numel() == 0) { return output; }
 
     // Regularize the shape to Batch x Nboxes x 4
     torch::Tensor boxes1_flat, boxes2_flat, output_flat;
     std::tie(boxes1_flat, boxes2_flat, output_flat) = regularize_shape_for_iou(boxes1, boxes2, output);
+
+    const auto common_dtype = c10::promoteTypes(boxes1_flat.scalar_type(), boxes2_flat.scalar_type());
+    boxes1_flat = boxes1_flat.contiguous().to(common_dtype);
+    boxes2_flat = boxes2_flat.contiguous().to(common_dtype);
 
     if (boxes1_flat.is_cuda()) {
         box_iou_gpu_impl<IouType>(boxes1_flat, boxes2_flat, output_flat);

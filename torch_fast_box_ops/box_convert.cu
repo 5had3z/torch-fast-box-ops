@@ -177,10 +177,10 @@ auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, 
         return input.clone();// No conversion needed, just return a copy
     }
 
-    const auto is_cuda = input.is_cuda();
     auto output = torch::empty_like(input);
     auto numBoxes = input.numel() >> 2;// Assuming input is of shape (..., 4) for boxes
     cudaStream_t stream = nullptr;
+    const auto is_cuda = input.is_cuda();
     if (is_cuda) { stream = at::cuda::getCurrentCUDAStream(); }
 
     TFBO_DISPATCH_BOX_TYPES(input.scalar_type(), "box_convert_forward", [&] {
@@ -236,10 +236,10 @@ auto box_convert_backward(const torch::Tensor &out_grad, const std::string &in_f
         return out_grad.clone();// No conversion needed, just return a copy
     }
 
-    const auto is_cuda = out_grad.is_cuda();
     auto output = torch::empty_like(out_grad);
     auto numBoxes = out_grad.numel() >> 2;// Assuming input is of shape (..., 4) for boxes
     cudaStream_t stream = nullptr;
+    const auto is_cuda = out_grad.is_cuda();
     if (is_cuda) { stream = at::cuda::getCurrentCUDAStream(); }
 
     TFBO_DISPATCH_BOX_TYPES(out_grad.scalar_type(), "box_convert_backward", [&] {
