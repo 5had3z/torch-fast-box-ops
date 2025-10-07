@@ -75,10 +75,10 @@ auto TFBO_HOST_DEVICE box_iou_fn(const XYXY<In> &box1, const In area1, const XYX
     const Out union_area = area1 + area2 - intersection;
     const Out iou = intersection / union_area;
     if constexpr (std::is_same_v<IouType, iou_tag>) {
-        return intersection / union_area;
+        return iou;
     } else if constexpr (std::is_same_v<IouType, giou_tag>) {
         XYXY<In> enclosing_box = min_enclosing_box(box1, box2);
-        Out enclosing_area = std::max(box_area_op(enclosing_box), static_cast<In>(1e-7f));
+        Out enclosing_area = std::max(box_area_op(enclosing_box), static_cast<In>(0));
         return iou - (enclosing_area - union_area) / enclosing_area;
     } else if constexpr (std::is_same_v<IouType, diou_tag> || std::is_same_v<IouType, ciou_tag>) {
         XYXY<In> enclosing_box = min_enclosing_box(box1, box2);
@@ -201,7 +201,13 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
         if (N < box_iou_block_size_x || M < box_iou_block_size_y) {
             int min_grid_size = 0;
             int block_size = 0;
-            cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &block_size, box_iou_simple_kernel<scalar_t, IouType>);
+            const auto err = cudaOccupancyMaxPotentialBlockSize(
+                &min_grid_size, &block_size, box_iou_simple_kernel<scalar_t, IouType>);
+            if (err != cudaSuccess) {
+                throw std::runtime_error(
+                    "Failed to calculate optimal block size for kernel: " + std::string(cudaGetErrorString(err)));
+            }
+            if (block_size == 0) { throw std::runtime_error("Failed to calculate optimal block size for kernel."); }
             block_size = std::min(static_cast<int>(M * N), block_size);
             const auto grid_dim = dim3(cuda::ceil_div(M * N, static_cast<unsigned int>(block_size)), 1, B);
             box_iou_simple_kernel<scalar_t, IouType>
@@ -253,6 +259,7 @@ template<typename IouType> auto box_iou(const torch::Tensor &boxes1, const torch
     TORCH_CHECK(boxes1.ndimension() >= 2, "Input tensors boxes1 and boxes2 must have at least 2 dimensions");
 
     auto output = create_iou_output_tensor(boxes1, boxes2);
+    if (output.numel() == 0) { return output; }
 
     // Regularize the shape to Batch x Nboxes x 4
     torch::Tensor boxes1_flat, boxes2_flat, output_flat;
