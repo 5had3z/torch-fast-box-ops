@@ -8,11 +8,14 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 if __name__ == "__main__":
     ignore_files = {"profile.cpp"}
     targets = list(
-        filter(
-            lambda f: f.is_file()
-            and f.suffix in {".cpp", ".cu"}
-            and f.name not in ignore_files,
-            Path("torch_fast_box_ops").iterdir(),
+        map(
+            str,
+            filter(
+                lambda f: f.is_file()
+                and f.suffix in {".cpp", ".cu"}
+                and f.name not in ignore_files,
+                Path("torch_fast_box_ops").iterdir(),
+            ),
         )
     )
     setup(
