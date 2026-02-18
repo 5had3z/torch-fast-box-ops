@@ -86,13 +86,13 @@ template<typename T>
 TFBO_HOST_DEVICE auto inter_union_grad(T grad_inter, T grad_union, const XYXY<T> &box1, const XYXY<T> &box2)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
-    XYXY<T> inter_box = box_intersection(box1, box2);
-    T inter_area = std::max(box_area_op(inter_box), static_cast<T>(0));
-    T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
+    const auto inter_box = box_intersection(box1, box2);
+    const auto inter_area = std::max(box_area_op(inter_box), static_cast<area_t<T>>(0));
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
 
-    auto [inter_grad_box1, inter_grad_box2] = intersection_grad(box1, box2, inter_box);
-    auto area_grad_box1 = box_area_grad(box1);
-    auto area_grad_box2 = box_area_grad(box2);
+    const auto [inter_grad_box1, inter_grad_box2] = intersection_grad(box1, box2, inter_box);
+    const auto area_grad_box1 = box_area_grad(box1);
+    const auto area_grad_box2 = box_area_grad(box2);
 
     // dUnion = dArea1 + dArea2 - dIntersection
     // grad = dUnion * gradUnion + dIntersection * gradInter
@@ -162,25 +162,25 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
 
 template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps, giou_tag) -> T
 {
-    auto intersection = box_intersection_area(box1, box2);
-    auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
-    XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
-    T enclosing_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
-    T giou = intersection / union_area - (enclosing_area - union_area) / (enclosing_area + eps);
-    return 1 - giou;
+    const auto intersection = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    const auto enclosing_box = min_enclosing_box(box1, box2);
+    const auto enclosing_area = std::max(box_area_op(enclosing_box), static_cast<area_t<T>>(0));
+    const auto giou = intersection / union_area - (enclosing_area - union_area) / (enclosing_area + eps);
+    return static_cast<T>(1 - giou);
 }
 
 template<typename T>
 TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, giou_tag)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
-    T inter_area = box_intersection_area(box1, box2);
-    T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
-    XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
-    T enc_area = std::max(box_area_op(enclosing_box), static_cast<T>(0));
+    const auto inter_area = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
+    const auto enclosing_box = min_enclosing_box(box1, box2);
+    const auto enc_area = std::max(box_area_op(enclosing_box), static_cast<area_t<T>>(0));
 
-    T enc_area_eps = enc_area + eps;
-    T union_area_eps = union_area + eps;
+    const auto enc_area_eps = enc_area + eps;
+    const auto union_area_eps = union_area + eps;
 
     T grad_enc_area = grad_loss * union_area / (enc_area_eps * enc_area_eps);
     T grad_inter = -grad_loss / union_area_eps;
@@ -205,14 +205,14 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
 
 template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag) -> T
 {
-    auto intersection = box_intersection_area(box1, box2);
-    auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
-    XYXY<T> enclosing_box = min_enclosing_box(box1, box2);
-    const T diag_dist_sq = dist_sq<T>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
+    const auto intersection = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
+    const auto enclosing_box = min_enclosing_box(box1, box2);
+    const auto diag_dist_sq = dist_sq(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
     const CXCY<T> box1c(box1);
     const CXCY<T> box2c(box2);
-    const T cent_dist_sq = dist_sq<T>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
-    return 1 - intersection / union_area + cent_dist_sq / (diag_dist_sq + static_cast<T>(1e-7));
+    const auto cent_dist_sq = dist_sq(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
+    return static_cast<T>(1 - intersection / union_area + cent_dist_sq / (diag_dist_sq + static_cast<area_t<T>>(1e-7)));
 }
 
 /**
@@ -271,15 +271,15 @@ template<typename T>
 TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
-    const T inter_area = box_intersection_area(box1, box2);
-    const T union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
-    const XYXY enclosing_box = min_enclosing_box(box1, box2);
+    const auto inter_area = box_intersection_area(box1, box2);
+    const auto union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
+    const auto enclosing_box = min_enclosing_box(box1, box2);
     const CXCY<T> box1c(box1);
     const CXCY<T> box2c(box2);
-    const T diag_dist_sq = dist_sq<T>(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
-    const T cent_dist_sq = dist_sq<T>(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
+    const auto diag_dist_sq = dist_sq(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
+    const auto cent_dist_sq = dist_sq(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
 
-    const T union_area_eps = union_area + eps;
+    const auto union_area_eps = union_area + eps;
     const T grad_inter = -grad_loss / union_area_eps;
     const T grad_union = grad_loss * inter_area / (union_area_eps * union_area_eps);
 

@@ -18,9 +18,14 @@ struct ciou_tag : iou_type_tag
 {
 };
 
-template<typename T> TFBO_HOST_DEVICE auto box_area_op(const XYXY<T> &box) -> T
+// Type promotion for area calculations to prevent overflow with float16/half
+// Only promote true float16 (c10::Half) which has limited dynamic range (max ~65504)
+// BFloat16 has same exponent range as float32, so no promotion needed
+template<typename T> using area_t = std::conditional_t<std::is_same_v<T, c10::Half>, float, T>;
+
+template<typename T> TFBO_HOST_DEVICE auto box_area_op(const XYXY<T> &box) -> area_t<T>
 {
-    return (box.x2 - box.x1) * (box.y2 - box.y1);
+    return static_cast<area_t<T>>(box.x2 - box.x1) * static_cast<area_t<T>>(box.y2 - box.y1);
 }
 
 template<typename T> auto TFBO_HOST_DEVICE box_area_grad(XYXY<T> box) -> XYXY<T>
@@ -44,12 +49,12 @@ template<typename T> TFBO_HOST_DEVICE auto box_intersection(const XYXY<T> &box1,
 }
 
 
-template<typename T> TFBO_HOST_DEVICE auto box_intersection_area(const XYXY<T> &box1, const XYXY<T> &box2) -> T
+template<typename T> TFBO_HOST_DEVICE auto box_intersection_area(const XYXY<T> &box1, const XYXY<T> &box2) -> area_t<T>
 {
-    auto inter_box = box_intersection(box1, box2);
-    T inter_area = std::max(inter_box.x2 - inter_box.x1, static_cast<T>(0))
-                   * std::max(inter_box.y2 - inter_box.y1, static_cast<T>(0));
-    return inter_area;
+    const auto inter_box = box_intersection(box1, box2);
+    const auto width = static_cast<area_t<T>>(std::max(inter_box.x2 - inter_box.x1, static_cast<T>(0)));
+    const auto height = static_cast<area_t<T>>(std::max(inter_box.y2 - inter_box.y1, static_cast<T>(0)));
+    return width * height;
 }
 
 /**
@@ -81,4 +86,9 @@ template<typename T> struct CXCY
     {}
 };
 
-template<typename T> TFBO_HOST_DEVICE auto dist_sq(T p1, T p2) -> T { return p1 * p1 + p2 * p2; };
+template<typename T> TFBO_HOST_DEVICE auto dist_sq(T p1, T p2) -> area_t<T>
+{
+    const area_t<T> p1_t = static_cast<area_t<T>>(p1);
+    const area_t<T> p2_t = static_cast<area_t<T>>(p2);
+    return p1_t * p1_t + p2_t * p2_t;
+};

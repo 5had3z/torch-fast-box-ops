@@ -35,10 +35,13 @@ IouFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 )
 def test_box_area(device: str, dtype: torch.dtype):
     boxes = make_random_boxes("xyxy", 10, dtype=dtype, device=device, normalized=True)
-    tv_area = tv_box_area(boxes).to(dtype=dtype)
     tfbo_area = tfbo_box_area(boxes)
+    tv_area = tv_box_area(boxes).to(dtype=tfbo_area.dtype)
 
-    torch.testing.assert_close(tfbo_area, tv_area[..., None])
+    if dtype == torch.float16:
+        torch.testing.assert_close(tfbo_area, tv_area[..., None], rtol=1e-3, atol=1e-5)
+    else:
+        torch.testing.assert_close(tfbo_area, tv_area[..., None])
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -52,11 +55,13 @@ def test_box_area_backward(device: str, dtype: torch.dtype):
     tfbo_boxes.requires_grad = True
 
     # Forward pass
-    tv_area = tv_box_area(tv_boxes).to(dtype=dtype)
     tfbo_area = tfbo_box_area(tfbo_boxes)[..., 0]
+    tv_area = tv_box_area(tv_boxes).to(dtype=tfbo_area.dtype)
 
     with torch.no_grad():
-        random_targets = torch.normal(tv_area, std=0.5).to(dtype=dtype, device=device)
+        random_targets = torch.normal(tv_area, std=0.5).to(
+            dtype=tfbo_area.dtype, device=device
+        )
 
     # Backward pass
     F.mse_loss(tv_area, random_targets).backward()
@@ -78,6 +83,36 @@ def test_box_iou(device: str, num_batch: int, dtype: torch.dtype, num_boxes: tup
     )
     boxes2 = make_random_boxes(
         "xyxy", num_boxes[1], dtype=dtype, device=device, num_batch=num_batch, seed=1
+    )
+
+    if num_batch > 1:
+        tv_iou = torch.stack([tv_box_iou(b1, b2) for b1, b2 in zip(boxes1, boxes2)])
+    else:
+        tv_iou = tv_box_iou(boxes1, boxes2)
+
+    tfbo_iou = tfbo_box_iou(boxes1, boxes2)
+
+    if dtype == torch.float16:
+        # Torchvision's box_iou has issues with float16 precision
+        tv_iou = tv_iou.to(dtype=dtype)
+        torch.testing.assert_close(tfbo_iou, tv_iou, rtol=5e-3, atol=5e-5)
+    elif dtype == torch.int32:
+        torch.testing.assert_close(tfbo_iou, tv_iou, equal_nan=True)
+    else:
+        torch.testing.assert_close(tfbo_iou, tv_iou)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("num_batch", [1, 128, 70000])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.float16, torch.int32]
+)
+def test_box_iou_large_batch(device: str, num_batch: int, dtype: torch.dtype):
+    boxes1 = make_random_boxes(
+        "xyxy", 1, dtype=dtype, device=device, num_batch=num_batch, seed=0
+    )
+    boxes2 = make_random_boxes(
+        "xyxy", 1, dtype=dtype, device=device, num_batch=num_batch, seed=1
     )
 
     if num_batch > 1:
@@ -226,8 +261,11 @@ def test_loss_inter_union_backward(device: str, dtype: torch.dtype):
     (1 - tfbo_inter / tfbo_union).sum().backward()
 
     # Check gradients
-    torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad)
-    torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad)
+    is_fp16 = dtype == torch.float16
+    rtol = 2e-3 if is_fp16 else None
+    atol = 2e-5 if is_fp16 else None
+    torch.testing.assert_close(boxes1_tfbo.grad, boxes1_tv.grad, rtol=rtol, atol=atol)
+    torch.testing.assert_close(boxes2_tfbo.grad, boxes2_tv.grad, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

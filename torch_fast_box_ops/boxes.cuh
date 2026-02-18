@@ -33,7 +33,11 @@ template<> struct aligned_type<c10::BFloat16, 4>
 
 template<> struct aligned_type<double, 4>
 {
+#if defined(__CUDACC_VER_MAJOR__) && __CUDACC_VER_MAJOR__ >= 12
+    using vec_t = double4_32a;// CUDA 12+ uses explicit alignment types
+#else
     using vec_t = double4;
+#endif
 };
 
 template<typename T> struct alignas(box_aligned_size<T>::value) XYXY
