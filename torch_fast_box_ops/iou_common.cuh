@@ -2,6 +2,8 @@
 
 #include "boxes.cuh"
 
+#include <limits>
+
 struct iou_type_tag
 {
 };
@@ -22,6 +24,16 @@ struct ciou_tag : iou_type_tag
 // Only promote true float16 (c10::Half) which has limited dynamic range (max ~65504)
 // BFloat16 has same exponent range as float32, so no promotion needed
 template<typename T> using area_t = std::conditional_t<std::is_same_v<T, c10::Half>, float, T>;
+
+// Floor eps at the smallest normal of the *output* type T so that 1/(area + eps) stays
+// representable when a box is degenerate (zero area). Areas accumulate in area_t, but the
+// gradients are narrowed back to T: with the default eps=1e-7 a zero-area box gives
+// 1/eps = 1e7, which overflows fp16 (max 65504) to inf and then poisons the whole batch
+// via inf*0 = NaN. For fp32/fp64 the floor is far below eps, so behaviour is unchanged.
+template<typename T> TFBO_HOST_DEVICE auto safe_eps(T eps) -> area_t<T>
+{
+    return std::max(static_cast<area_t<T>>(eps), static_cast<area_t<T>>(std::numeric_limits<T>::min()));
+}
 
 template<typename T> TFBO_HOST_DEVICE auto box_area_op(const XYXY<T> &box) -> area_t<T>
 {

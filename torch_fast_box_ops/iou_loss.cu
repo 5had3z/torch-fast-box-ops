@@ -166,14 +166,15 @@ template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, cons
     const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
     const auto enclosing_box = min_enclosing_box(box1, box2);
     const auto enclosing_area = std::max(box_area_op(enclosing_box), static_cast<area_t<T>>(0));
-    const auto giou = intersection / union_area - (enclosing_area - union_area) / (enclosing_area + eps);
+    const auto giou = intersection / (union_area + eps) - (enclosing_area - union_area) / (enclosing_area + eps);
     return static_cast<T>(1 - giou);
 }
 
 template<typename T>
-TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, giou_tag)
+TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps_in, giou_tag)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
+    const auto eps = safe_eps(eps_in);
     const auto inter_area = box_intersection_area(box1, box2);
     const auto union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
     const auto enclosing_box = min_enclosing_box(box1, box2);
@@ -182,7 +183,9 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
     const auto enc_area_eps = enc_area + eps;
     const auto union_area_eps = union_area + eps;
 
-    T grad_enc_area = grad_loss * union_area / (enc_area_eps * enc_area_eps);
+    // d/d(enc) of (enc - union)/(enc + eps) is (union + eps)/(enc + eps)^2; the eps in the
+    // numerator only matters when eps is non-negligible against the areas (sub-pixel boxes)
+    T grad_enc_area = grad_loss * union_area_eps / (enc_area_eps * enc_area_eps);
     T grad_inter = -grad_loss / union_area_eps;
     T grad_union = grad_loss * (inter_area / (union_area_eps * union_area_eps) - 1 / enc_area_eps);
 
@@ -212,7 +215,8 @@ template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, cons
     const CXCY<T> box1c(box1);
     const CXCY<T> box2c(box2);
     const auto cent_dist_sq = dist_sq(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
-    return static_cast<T>(1 - intersection / union_area + cent_dist_sq / (diag_dist_sq + static_cast<area_t<T>>(1e-7)));
+    return static_cast<T>(
+        1 - intersection / (union_area + eps) + cent_dist_sq / (diag_dist_sq + static_cast<area_t<T>>(eps)));
 }
 
 /**
@@ -268,15 +272,17 @@ template<typename T> TFBO_HOST_DEVICE auto ddist_grad_br(T p1, T p2, T l) -> T
 
 
 template<typename T>
-TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, diou_tag)
+TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps_in, diou_tag)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
+    const auto eps = safe_eps(eps_in);
     const auto inter_area = box_intersection_area(box1, box2);
     const auto union_area = box_area_op(box1) + box_area_op(box2) - inter_area;
     const auto enclosing_box = min_enclosing_box(box1, box2);
     const CXCY<T> box1c(box1);
     const CXCY<T> box2c(box2);
-    const auto diag_dist_sq = dist_sq(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1);
+    const auto diag_dist_sq =
+        dist_sq(enclosing_box.x2 - enclosing_box.x1, enclosing_box.y2 - enclosing_box.y1) + static_cast<area_t<T>>(eps);
     const auto cent_dist_sq = dist_sq(box1c.cx - box2c.cx, box1c.cy - box2c.cy);
 
     const auto union_area_eps = union_area + eps;
@@ -325,7 +331,7 @@ template<typename T> TFBO_HOST_DEVICE auto iou_loss_fn(const XYXY<T> &box1, cons
     const auto diou_loss = iou_loss_fn(box1, box2, eps, diou_tag{});
     const auto intersection = box_intersection_area(box1, box2);
     const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
-    const auto iou = intersection / union_area;
+    const auto iou = intersection / (union_area + eps);
 
     const auto aspect =
         std::atan(box1.width() / (box1.height() + eps)) - std::atan(box2.width() / (box2.height() + eps));
@@ -361,34 +367,43 @@ template<typename T> TFBO_HOST_DEVICE auto ciou_ratio_grad(T alpha, T ratio_diff
  * @param b The other side's length
  * @return du/dp term
  */
-template<typename T> TFBO_HOST_DEVICE auto ciou_point_grad(T a, T b) -> T { return b / (a * a + b * b); }
+template<typename T> TFBO_HOST_DEVICE auto ciou_point_grad(T a, T b, area_t<T> eps) -> area_t<T>
+{
+    const auto a_t = static_cast<area_t<T>>(a);
+    const auto b_t = static_cast<area_t<T>>(b);
+    // b / (a^2 + b^2) is exactly d/da atan(a/b), so eps must not perturb it for a box of
+    // any real size. Clamp the denominator instead of offsetting it: this is the true
+    // derivative everywhere except a degenerate box, where it would otherwise be 0/0.
+    return b_t / std::max(a_t * a_t + b_t * b_t, eps);
+}
 
 
 template<typename T>
-TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps, ciou_tag)
+TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &box2, T eps_in, ciou_tag)
     -> std::tuple<XYXY<T>, XYXY<T>>
 {
+    const auto eps = safe_eps(eps_in);
     const auto intersection = box_intersection_area(box1, box2);
     const auto union_area = box_area_op(box1) + box_area_op(box2) - intersection;
-    const auto iou = intersection / union_area;
+    const auto iou = intersection / (union_area + eps);
 
     const T aspect_diff =
         std::atan(box1.width() / (box1.height() + eps)) - std::atan(box2.width() / (box2.height() + eps));
     const T v = 4 / (M_PI * M_PI) * aspect_diff * aspect_diff;
     const T alpha = v / (1 - iou + v + eps);
 
-    auto [box1grad, box2grad] = iou_grad(grad_loss, box1, box2, eps, diou_tag{});
+    auto [box1grad, box2grad] = iou_grad(grad_loss, box1, box2, eps_in, diou_tag{});
 
     const auto ratio_grad = grad_loss * ciou_ratio_grad(alpha, aspect_diff);
-    const auto box1_x_grad = ciou_point_grad(box1.width(), box1.height());
-    const auto box1_y_grad = ciou_point_grad(box1.height(), box1.width());
+    const auto box1_x_grad = ciou_point_grad(box1.width(), box1.height(), eps);
+    const auto box1_y_grad = ciou_point_grad(box1.height(), box1.width(), eps);
     box1grad.x1 = fma(ratio_grad, -box1_x_grad, box1grad.x1);
     box1grad.y1 = fma(ratio_grad, box1_y_grad, box1grad.y1);
     box1grad.x2 = fma(ratio_grad, box1_x_grad, box1grad.x2);
     box1grad.y2 = fma(ratio_grad, -box1_y_grad, box1grad.y2);
 
-    const auto box2_x_grad = ciou_point_grad(box2.width(), box2.height());
-    const auto box2_y_grad = ciou_point_grad(box2.height(), box2.width());
+    const auto box2_x_grad = ciou_point_grad(box2.width(), box2.height(), eps);
+    const auto box2_y_grad = ciou_point_grad(box2.height(), box2.width(), eps);
     box2grad.x1 = fma(ratio_grad, box2_x_grad, box2grad.x1);
     box2grad.y1 = fma(ratio_grad, -box2_y_grad, box2grad.y1);
     box2grad.x2 = fma(ratio_grad, -box2_x_grad, box2grad.x2);

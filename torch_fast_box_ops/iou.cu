@@ -104,9 +104,11 @@ auto TFBO_HOST_DEVICE
         if constexpr (std::is_same_v<IouType, diou_tag>) {
             return static_cast<Out>(diou);
         } else {
-            const ComputeT aspect =
-                std::atan(static_cast<ComputeT>(box1.width()) / (static_cast<ComputeT>(box1.height()) + eps))
-                - std::atan(static_cast<ComputeT>(box2.width()) / (static_cast<ComputeT>(box2.height()) + eps));
+            const ComputeT box1_aspect =
+                static_cast<ComputeT>(box1.width()) / (static_cast<ComputeT>(box1.height()) + eps);
+            const ComputeT box2_aspect =
+                static_cast<ComputeT>(box2.width()) / (static_cast<ComputeT>(box2.height()) + eps);
+            const ComputeT aspect = std::atan(box1_aspect) - std::atan(box2_aspect);
             const ComputeT v = (4.f / (M_PIf * M_PIf)) * aspect * aspect;
             const ComputeT alpha = v / (1 - iou + v + eps);
             return static_cast<Out>(diou - alpha * v);
@@ -186,12 +188,11 @@ template<typename T, typename IouType, typename U = std::conditional_t<std::is_i
 __global__ void box_iou_flat_kernel(const XYXY<T> *__restrict__ boxes1,
     const XYXY<T> *__restrict__ boxes2,
     U *output,
-    unsigned int B,
-    unsigned int N,
-    unsigned int M)
+    const unsigned int N,
+    const unsigned int M,
+    const unsigned int total_elements)
 {
     const unsigned int global_tid = threadIdx.x + blockDim.x * blockIdx.x;
-    const unsigned int total_elements = B * N * M;
     if (global_tid >= total_elements) { return; }
 
     // Decompose global thread ID into b, n, m indices
@@ -232,9 +233,10 @@ void box_iou_gpu_impl(const torch::Tensor &boxes1, const torch::Tensor &boxes2, 
             }
             if (block_size == 0) { throw std::runtime_error("Failed to calculate optimal block size for kernel."); }
 
-            const auto grid_size = cuda::ceil_div(B * N * M, static_cast<unsigned int>(block_size));
+            const auto grid_size = cuda::ceil_div(B * N * M, static_cast<uint>(block_size));
+            const uint total_elements = B * N * M;
             box_iou_flat_kernel<scalar_t, IouType>
-                <<<grid_size, block_size, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, B, N, M);
+                <<<grid_size, block_size, 0, stream>>>(boxes1_ptr, boxes2_ptr, output_ptr, N, M, total_elements);
         } else {
             // Use optimized 2D block kernel for larger N and M with reasonable batch sizes
             auto block_dim = dim3(box_iou_block_size_x, box_iou_block_size_y);
