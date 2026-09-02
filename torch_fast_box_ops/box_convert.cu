@@ -1,5 +1,5 @@
 #include <ATen/cuda/CUDAContext.h>
-#include <torch/extension.h>
+#include "torch_api.h"
 
 #include <cuda/cmath>
 
@@ -167,8 +167,8 @@ auto make_forward_converter() -> BoxConverter<T>
     };
 }
 
-auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, const std::string &out_fmt)
-    -> torch::Tensor
+auto box_convert_forward(const at::Tensor &input, const std::string &in_fmt, const std::string &out_fmt)
+    -> at::Tensor
 {
     TORCH_CHECK(input.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(input.size(-1) == 4, "Input tensor must have shape (..., 4) for boxes");
@@ -177,7 +177,7 @@ auto box_convert_forward(const torch::Tensor &input, const std::string &in_fmt, 
         return input.clone();// No conversion needed, just return a copy
     }
 
-    auto output = torch::empty_like(input);
+    auto output = at::empty_like(input);
     auto numBoxes = input.numel() >> 2;// Assuming input is of shape (..., 4) for boxes
     cudaStream_t stream = nullptr;
     const auto is_cuda = input.is_cuda();
@@ -226,8 +226,8 @@ auto make_backward_converter() -> BoxConverter<T>
     };
 }
 
-auto box_convert_backward(const torch::Tensor &out_grad, const std::string &in_fmt, const std::string &out_fmt)
-    -> torch::Tensor
+auto box_convert_backward(const at::Tensor &out_grad, const std::string &in_fmt, const std::string &out_fmt)
+    -> at::Tensor
 {
     TORCH_CHECK(out_grad.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(out_grad.size(-1) == 4, "Input tensor must have shape (..., 4) for boxes");
@@ -236,7 +236,7 @@ auto box_convert_backward(const torch::Tensor &out_grad, const std::string &in_f
         return out_grad.clone();// No conversion needed, just return a copy
     }
 
-    auto output = torch::empty_like(out_grad);
+    auto output = at::empty_like(out_grad);
     auto numBoxes = out_grad.numel() >> 2;// Assuming input is of shape (..., 4) for boxes
     cudaStream_t stream = nullptr;
     const auto is_cuda = out_grad.is_cuda();

@@ -1,12 +1,12 @@
 #include <ATen/cuda/CUDAContext.h>
-#include <torch/extension.h>
+#include "torch_api.h"
 
 #include <cuda/cmath>
 
 #include "iou_common.cuh"
 
-auto loss_inter_union(const torch::Tensor &boxes1, const torch::Tensor &boxes2)
-    -> std::tuple<torch::Tensor, torch::Tensor>
+auto loss_inter_union(const at::Tensor &boxes1, const at::Tensor &boxes2)
+    -> std::tuple<at::Tensor, at::Tensor>
 {
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
@@ -14,8 +14,8 @@ auto loss_inter_union(const torch::Tensor &boxes1, const torch::Tensor &boxes2)
     auto boxes1_c = boxes1.contiguous().to(common_dtype);
     auto boxes2_c = boxes2.contiguous().to(common_dtype);
 
-    torch::Tensor intersection = boxes1_c.new_empty({ boxes1.size(0) });
-    torch::Tensor union_area = boxes1_c.new_empty({ boxes1.size(0) });
+    at::Tensor intersection = boxes1_c.new_empty({ boxes1.size(0) });
+    at::Tensor union_area = boxes1_c.new_empty({ boxes1.size(0) });
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(boxes1.scalar_type(), "_loss_inter_union", [&] {
         const auto num_boxes = boxes1.size(0);
@@ -115,10 +115,10 @@ TFBO_HOST_DEVICE auto inter_union_grad(T grad_inter, T grad_union, const XYXY<T>
     return { grad_box1, grad_box2 };
 }
 
-auto loss_inter_union_backward(const torch::Tensor &grad_inter,
-    const torch::Tensor &grad_union,
-    const torch::Tensor &boxes1,
-    const torch::Tensor &boxes2) -> std::tuple<torch::Tensor, torch::Tensor>
+auto loss_inter_union_backward(const at::Tensor &grad_inter,
+    const at::Tensor &grad_union,
+    const at::Tensor &boxes1,
+    const at::Tensor &boxes2) -> std::tuple<at::Tensor, at::Tensor>
 {
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
@@ -129,8 +129,8 @@ auto loss_inter_union_backward(const torch::Tensor &grad_inter,
     auto boxes1_c = boxes1.contiguous().to(common_dtype);
     auto boxes2_c = boxes2.contiguous().to(common_dtype);
 
-    auto grad_boxes1 = torch::empty_like(boxes1_c);
-    auto grad_boxes2 = torch::empty_like(boxes2_c);
+    auto grad_boxes1 = at::empty_like(boxes1_c);
+    auto grad_boxes2 = at::empty_like(boxes2_c);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(common_dtype, "_loss_inter_union_backward", [&] {
         const auto num_boxes = boxes1.size(0);
@@ -413,7 +413,7 @@ TFBO_HOST_DEVICE auto iou_grad(T grad_loss, const XYXY<T> &box1, const XYXY<T> &
 }
 
 template<typename IoUType>
-auto box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, double eps) -> torch::Tensor
+auto box_iou_loss(const at::Tensor &boxes1, const at::Tensor &boxes2, double eps) -> at::Tensor
 {
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
@@ -446,10 +446,10 @@ auto box_iou_loss(const torch::Tensor &boxes1, const torch::Tensor &boxes2, doub
 }
 
 template<typename IoUType>
-auto box_iou_loss_backward(const torch::Tensor &grad,
-    const torch::Tensor &boxes1,
-    const torch::Tensor &boxes2,
-    double eps) -> std::tuple<torch::Tensor, torch::Tensor>
+auto box_iou_loss_backward(const at::Tensor &grad,
+    const at::Tensor &boxes1,
+    const at::Tensor &boxes2,
+    double eps) -> std::tuple<at::Tensor, at::Tensor>
 {
     TORCH_CHECK(boxes1.sizes() == boxes2.sizes(), "Input tensors boxes1 and boxes2 must have the same shape");
     TORCH_CHECK(boxes1.ndimension() == 2 && boxes1.size(-1) == 4, "Input tensors must have shape (N, 4)");
@@ -459,8 +459,8 @@ auto box_iou_loss_backward(const torch::Tensor &grad,
     auto boxes1_c = boxes1.contiguous().to(common_dtype);
     auto boxes2_c = boxes2.contiguous().to(common_dtype);
 
-    auto grad_boxes1 = torch::empty_like(boxes1_c);
-    auto grad_boxes2 = torch::empty_like(boxes2_c);
+    auto grad_boxes1 = at::empty_like(boxes1_c);
+    auto grad_boxes2 = at::empty_like(boxes2_c);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(common_dtype, "box_iou_loss_backward", [&] {
         const auto num_boxes = boxes1.size(0);
